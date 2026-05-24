@@ -40,17 +40,21 @@ const (
 )
 
 type OAuthService struct {
-	logger        zerolog.Logger
-	publicBaseURL string
-	operatorToken string
-	catalog       *CatalogCache
-	grants        GrantAuthorizer
-	browserAuth   *AuthRuntime
-	stateStore    edgeStateStore
-	manager       *manage.Manager
-	server        *oauth2server.Server
-	dcrEnabled    bool
-	cimdEnabled   bool
+	logger          zerolog.Logger
+	publicBaseURL   string
+	operatorToken   string
+	catalog         *CatalogCache
+	directory       *ServiceDirectory
+	grants          GrantAuthorizer
+	browserAuth     *AuthRuntime
+	stateStore      edgeStateStore
+	manager         *manage.Manager
+	server          *oauth2server.Server
+	dcrEnabled      bool
+	cimdEnabled     bool
+	accessTokenTTL  time.Duration
+	refreshTokenTTL time.Duration
+	deviceCodeTTL   time.Duration
 }
 
 type registeredClient struct {
@@ -131,12 +135,15 @@ type operatorTokenResponse struct {
 type refreshClientIDContextKey struct{}
 type expectedResourceContextKey struct{}
 
-func NewOAuthService(cfg Config, logger zerolog.Logger, catalogCache *CatalogCache, stateStore edgeStateStore, grants GrantAuthorizer, browserAuth *AuthRuntime) (*OAuthService, error) {
+func NewOAuthService(cfg Config, logger zerolog.Logger, catalogCache *CatalogCache, directory *ServiceDirectory, stateStore edgeStateStore, grants GrantAuthorizer, browserAuth *AuthRuntime) (*OAuthService, error) {
 	if stateStore == nil {
 		return nil, fmt.Errorf("edge oauth state store is required")
 	}
 	if catalogCache == nil {
 		return nil, fmt.Errorf("edge oauth catalog cache is required")
+	}
+	if directory == nil {
+		directory = NewServiceDirectory(cfg.PublicBaseURL, catalogCache)
 	}
 	operatorToken, err := resolveConfiguredSecret(cfg.OperatorTokenPath, cfg.FixtureOperatorToken)
 	if err != nil {
@@ -155,10 +162,8 @@ func NewOAuthService(cfg Config, logger zerolog.Logger, catalogCache *CatalogCac
 			resource = tgr.Request.FormValue("resource")
 		}
 		if strings.TrimSpace(resource) == "" && tokenInfoResource(ti) == "" {
-			if serviceID, err := singleServiceFromScope(tgr.Scope); err == nil {
-				if service, ok := catalogCache.ServiceByID(serviceID); ok {
-					resource = publicBaseURL + service.PublicPath
-				}
+			if resolution, err := directory.ResolveScope(tgr.Scope); err == nil {
+				resource = resolution.Resource
 			}
 		}
 		setTokenInfoResource(ti, resource)
@@ -172,8 +177,19 @@ func NewOAuthService(cfg Config, logger zerolog.Logger, catalogCache *CatalogCac
 		}
 		return oauth2errors.ErrInvalidRedirectURI
 	})
-	manager.SetAuthorizeCodeTokenCfg(manage.DefaultAuthorizeCodeTokenCfg)
-	manager.SetRefreshTokenCfg(manage.DefaultRefreshTokenCfg)
+	manager.SetAuthorizeCodeExp(cfg.OAuthAuthorizationCodeTTL)
+	manager.SetAuthorizeCodeTokenCfg(&manage.Config{
+		AccessTokenExp:    cfg.OAuthAccessTokenTTL,
+		RefreshTokenExp:   cfg.OAuthRefreshTokenTTL,
+		IsGenerateRefresh: true,
+	})
+	manager.SetRefreshTokenCfg(&manage.RefreshingConfig{
+		AccessTokenExp:     cfg.OAuthAccessTokenTTL,
+		RefreshTokenExp:    cfg.OAuthRefreshTokenTTL,
+		IsGenerateRefresh:  true,
+		IsRemoveAccess:     true,
+		IsRemoveRefreshing: true,
+	})
 
 	srv := oauth2server.NewServer(newOAuthServerConfig(), manager)
 	srv.SetClientInfoHandler(resolveClientCredentials)
@@ -185,7 +201,7 @@ func NewOAuthService(cfg Config, logger zerolog.Logger, catalogCache *CatalogCac
 		return subject.Sub, nil
 	})
 	srv.SetClientScopeHandler(func(tgr *oauth2.TokenGenerateRequest) (bool, error) {
-		if !scopeStringAllowed(tgr.Scope, catalogCache.Scopes()) {
+		if !scopeStringAllowed(tgr.Scope, directory.Scopes()) {
 			return false, nil
 		}
 		lookupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -198,17 +214,21 @@ func NewOAuthService(cfg Config, logger zerolog.Logger, catalogCache *CatalogCac
 	})
 
 	return &OAuthService{
-		logger:        logger,
-		publicBaseURL: publicBaseURL,
-		operatorToken: operatorToken,
-		catalog:       catalogCache,
-		grants:        grants,
-		browserAuth:   browserAuth,
-		stateStore:    stateStore,
-		manager:       manager,
-		server:        srv,
-		dcrEnabled:    cfg.DCREnabled,
-		cimdEnabled:   cfg.CIMDEnabled,
+		logger:          logger,
+		publicBaseURL:   publicBaseURL,
+		operatorToken:   operatorToken,
+		catalog:         catalogCache,
+		directory:       directory,
+		grants:          grants,
+		browserAuth:     browserAuth,
+		stateStore:      stateStore,
+		manager:         manager,
+		server:          srv,
+		dcrEnabled:      cfg.DCREnabled,
+		cimdEnabled:     cfg.CIMDEnabled,
+		accessTokenTTL:  cfg.OAuthAccessTokenTTL,
+		refreshTokenTTL: cfg.OAuthRefreshTokenTTL,
+		deviceCodeTTL:   cfg.OAuthDeviceCodeTTL,
 	}, nil
 }
 
@@ -242,7 +262,7 @@ func (o *OAuthService) handleAuthorizationServerMetadata(w http.ResponseWriter, 
 		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "metadata requires GET")
 		return
 	}
-	serviceID, serviceScoped, err := o.serviceIDFromWellKnownPath(r.URL.Path)
+	resolution, serviceScoped, err := o.serviceResolutionFromWellKnownPath(r.URL.Path)
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "service_not_found", "requested service is not registered on this edge")
 		return
@@ -252,14 +272,14 @@ func (o *OAuthService) handleAuthorizationServerMetadata(w http.ResponseWriter, 
 	authorizationEndpoint := o.publicBaseURL + "/oauth/authorize"
 	deviceAuthorizationEndpoint := o.publicBaseURL + "/oauth/device_authorization"
 	registrationEndpoint := o.publicBaseURL + "/oauth/register"
-	scopes := o.catalog.Scopes()
+	scopes := o.directory.Scopes()
 	dcrSupported := false
 	if serviceScoped {
-		issuer = o.serviceIssuer(serviceID)
-		authorizationEndpoint = o.publicBaseURL + "/oauth/authorize/" + serviceID
-		deviceAuthorizationEndpoint = o.publicBaseURL + "/oauth/device_authorization/" + serviceID
-		registrationEndpoint = o.publicBaseURL + "/oauth/register/" + serviceID
-		scopes = []string{"mcp:" + serviceID}
+		issuer = resolution.AuthorizationServerIssuer
+		authorizationEndpoint = resolution.AuthorizationEndpoint
+		deviceAuthorizationEndpoint = resolution.DeviceAuthorizationEndpoint
+		registrationEndpoint = resolution.RegistrationEndpoint
+		scopes = []string{resolution.Scope}
 		dcrSupported = o.dcrEnabled
 	}
 
@@ -281,36 +301,18 @@ func (o *OAuthService) handleAuthorizationServerMetadata(w http.ResponseWriter, 
 	})
 }
 
-func (o *OAuthService) serviceIDFromWellKnownPath(path string) (string, bool, error) {
+func (o *OAuthService) serviceResolutionFromWellKnownPath(path string) (ServiceResolution, bool, error) {
 	for _, prefix := range []string{"/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"} {
-		serviceID, serviceScoped, err := o.serviceIDFromWellKnownMetadataPath(path, prefix)
+		resolution, serviceScoped, err := o.serviceResolutionFromWellKnownMetadataPath(path, prefix)
 		if err == nil {
-			return serviceID, serviceScoped, nil
+			return resolution, serviceScoped, nil
 		}
 	}
-	return "", false, fmt.Errorf("unsupported service-scoped path")
+	return ServiceResolution{}, false, fmt.Errorf("unsupported service-scoped path")
 }
 
-func (o *OAuthService) serviceIDFromWellKnownMetadataPath(path string, prefix string) (string, bool, error) {
-	if path == prefix {
-		return "", false, nil
-	}
-	if !strings.HasPrefix(path, prefix+"/") {
-		return "", false, fmt.Errorf("unsupported service-scoped path")
-	}
-	serviceRef := strings.Trim(strings.TrimPrefix(path, prefix+"/"), "/")
-	if serviceRef == "" {
-		return "", true, fmt.Errorf("requested service is not registered")
-	}
-	if !strings.Contains(serviceRef, "/") {
-		if _, ok := o.catalog.ServiceByID(serviceRef); ok {
-			return serviceRef, true, nil
-		}
-	}
-	if service, ok := o.catalog.MatchPublicPath("/" + serviceRef); ok {
-		return service.ServiceID, true, nil
-	}
-	return "", true, fmt.Errorf("requested service is not registered")
+func (o *OAuthService) serviceResolutionFromWellKnownMetadataPath(path string, prefix string) (ServiceResolution, bool, error) {
+	return o.directory.ResolveWellKnownRef(path, prefix)
 }
 
 func (o *OAuthService) serviceIDFromPath(path string, prefix string) (string, bool, error) {
@@ -324,14 +326,10 @@ func (o *OAuthService) serviceIDFromPath(path string, prefix string) (string, bo
 	if serviceID == "" || strings.Contains(serviceID, "/") {
 		return "", true, fmt.Errorf("requested service is not registered")
 	}
-	if _, ok := o.catalog.ServiceByID(serviceID); !ok {
+	if _, ok := o.directory.ResolveByID(serviceID); !ok {
 		return "", true, fmt.Errorf("requested service is not registered")
 	}
 	return serviceID, true, nil
-}
-
-func (o *OAuthService) serviceIssuer(serviceID string) string {
-	return o.publicBaseURL + "/" + strings.Trim(strings.TrimSpace(serviceID), "/")
 }
 
 func (o *OAuthService) narrowRequestScopeToService(r *http.Request, serviceID string) error {
@@ -352,7 +350,7 @@ func (o *OAuthService) scopeForServiceContext(scope string, serviceID string) (s
 	if scope == "" {
 		return serviceScope, nil
 	}
-	if !scopeStringAllowed(scope, o.catalog.Scopes()) {
+	if !scopeStringAllowed(scope, o.directory.Scopes()) {
 		return "", fmt.Errorf("requested scopes are not supported")
 	}
 	if !scopeIncludesService(scope, serviceID) {
@@ -407,7 +405,7 @@ func (o *OAuthService) handleDeviceAuthorization(w http.ResponseWriter, r *http.
 		writeJSONError(w, http.StatusBadRequest, "invalid_scope", "exactly one mcp:<service> scope is required")
 		return
 	}
-	if !scopeStringAllowed(scope, o.catalog.Scopes()) || !clientAllowsScope(clientInfo, scope) {
+	if !scopeStringAllowed(scope, o.directory.Scopes()) || !clientAllowsScope(clientInfo, scope) {
 		writeJSONError(w, http.StatusBadRequest, "invalid_scope", "requested scope is not supported")
 		return
 	}
@@ -432,7 +430,7 @@ func (o *OAuthService) handleDeviceAuthorization(w http.ResponseWriter, r *http.
 		return
 	}
 	now := time.Now().UTC()
-	ttl := 10 * time.Minute
+	ttl := o.deviceCodeTTL
 	interval := 5 * time.Second
 	record := deviceAuthorization{
 		ID:              ids.New(),
@@ -470,22 +468,17 @@ func (o *OAuthService) handleProtectedResourceMetadata(w http.ResponseWriter, r 
 		return
 	}
 
-	serviceID, serviceScoped, err := o.serviceIDFromWellKnownMetadataPath(r.URL.Path, "/.well-known/oauth-protected-resource")
+	resolution, serviceScoped, err := o.serviceResolutionFromWellKnownMetadataPath(r.URL.Path, "/.well-known/oauth-protected-resource")
 	if err != nil {
 		writeJSONError(w, http.StatusNotFound, "service_not_found", "requested service is not registered on this edge")
 		return
 	}
 	if serviceScoped {
-		service, ok := o.catalog.ServiceByID(serviceID)
-		if !ok {
-			writeJSONError(w, http.StatusNotFound, "service_not_found", "requested service is not registered on this edge")
-			return
-		}
-		o.writeProtectedResourceMetadata(w, o.publicBaseURL+service.PublicPath, []string{"mcp:" + service.ServiceID}, service.DisplayName, []string{o.serviceIssuer(service.ServiceID)})
+		o.writeProtectedResourceMetadata(w, resolution.Resource, []string{resolution.Scope}, resolution.Service.DisplayName, []string{resolution.AuthorizationServerIssuer})
 		return
 	}
 
-	o.writeProtectedResourceMetadata(w, o.publicBaseURL, o.catalog.Scopes(), "mcp-edge", []string{o.publicBaseURL})
+	o.writeProtectedResourceMetadata(w, o.publicBaseURL, o.directory.Scopes(), "mcp-edge", []string{o.publicBaseURL})
 }
 
 func (o *OAuthService) writeProtectedResourceMetadata(w http.ResponseWriter, resource string, scopes []string, resourceName string, authorizationServers []string) {
@@ -521,7 +514,7 @@ func (o *OAuthService) handleClientRegistration(w http.ResponseWriter, r *http.R
 		writeJSONError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
 		return
 	}
-	allowedScopes := o.catalog.Scopes()
+	allowedScopes := o.directory.Scopes()
 	if serviceScoped {
 		scope, err := o.scopeForServiceContext(req.Scope, serviceID)
 		if err != nil {
@@ -804,8 +797,8 @@ func (o *OAuthService) handleDeviceVerificationPost(w http.ResponseWriter, r *ht
 		writeJSONError(w, http.StatusBadRequest, "unauthorized_client", "client is no longer authorized for this device request")
 		return
 	}
-	service, ok := o.catalog.ServiceByID(record.ServiceID)
-	if !ok || record.Resource != o.publicBaseURL+service.PublicPath {
+	resolution, ok := o.directory.ResolveByID(record.ServiceID)
+	if !ok || record.Resource != resolution.Resource {
 		writeJSONError(w, http.StatusBadRequest, "invalid_resource", "device authorization resource is no longer valid")
 		return
 	}
@@ -998,8 +991,8 @@ func (o *OAuthService) handleDeviceToken(w http.ResponseWriter, r *http.Request)
 		writeJSONError(w, http.StatusBadRequest, "unauthorized_client", "client is no longer authorized for this device grant")
 		return
 	}
-	service, ok := o.catalog.ServiceByID(record.ServiceID)
-	if !ok || record.Resource != o.publicBaseURL+service.PublicPath {
+	resolution, ok := o.directory.ResolveByID(record.ServiceID)
+	if !ok || record.Resource != resolution.Resource {
 		writeJSONError(w, http.StatusBadRequest, "invalid_resource", "device authorization resource is no longer valid")
 		return
 	}
@@ -1025,7 +1018,7 @@ func (o *OAuthService) handleDeviceToken(w http.ResponseWriter, r *http.Request)
 	token.SetScope(record.Scope)
 	token.SetAccess(accessToken)
 	token.SetAccessCreateAt(now)
-	token.SetAccessExpiresIn(time.Hour)
+	token.SetAccessExpiresIn(o.accessTokenTTL)
 	setTokenInfoResource(token, record.Resource)
 	setTokenInfoIssuedVia(token, oauthGrantDeviceCode)
 	var refreshToken string
@@ -1037,7 +1030,7 @@ func (o *OAuthService) handleDeviceToken(w http.ResponseWriter, r *http.Request)
 		}
 		token.SetRefresh(refreshToken)
 		token.SetRefreshCreateAt(now)
-		token.SetRefreshExpiresIn(24 * time.Hour)
+		token.SetRefreshExpiresIn(o.refreshTokenTTL)
 	}
 	consumed, err := o.stateStore.ConsumeDeviceAuthorizationAndCreateToken(r.Context(), record.ID, now, token)
 	if err != nil || !consumed {
@@ -1052,7 +1045,7 @@ func (o *OAuthService) handleDeviceToken(w http.ResponseWriter, r *http.Request)
 	response := map[string]any{
 		"access_token": accessToken,
 		"token_type":   "Bearer",
-		"expires_in":   int64(time.Hour / time.Second),
+		"expires_in":   int64(o.accessTokenTTL / time.Second),
 		"scope":        record.Scope,
 		"resource":     record.Resource,
 	}
@@ -1142,25 +1135,20 @@ func (o *OAuthService) handleOperatorTokens(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	scope := strings.TrimSpace(req.Scope)
-	if scope == "" || !scopeStringAllowed(scope, o.catalog.Scopes()) {
+	if scope == "" || !scopeStringAllowed(scope, o.directory.Scopes()) {
 		writeJSONError(w, http.StatusBadRequest, "invalid_scope", "requested scope is not supported")
 		return
 	}
-	serviceID, err := singleServiceFromScope(scope)
+	resolution, err := o.directory.ResolveScope(scope)
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid_scope", err.Error())
 		return
 	}
-	service, ok := o.catalog.ServiceByID(serviceID)
-	if !ok {
-		writeJSONError(w, http.StatusBadRequest, "invalid_scope", "requested service is not registered")
-		return
-	}
 	resource := strings.TrimRight(strings.TrimSpace(req.Resource), "/")
 	if resource == "" {
-		resource = o.publicBaseURL + service.PublicPath
+		resource = resolution.Resource
 	}
-	if resource != o.publicBaseURL+service.PublicPath {
+	if resource != resolution.Resource {
 		writeJSONError(w, http.StatusBadRequest, "invalid_resource", "resource must match the requested MCP service")
 		return
 	}
@@ -1214,7 +1202,7 @@ func (o *OAuthService) handleOperatorTokens(w http.ResponseWriter, r *http.Reque
 		writeJSONError(w, http.StatusInternalServerError, "token_store_failed", "unable to persist operator token")
 		return
 	}
-	o.recordAuditEvent(r.Context(), edgeAuditEvent{ActorSubjectSub: subjectSub, ServiceID: serviceID, EventType: "oauth.operator_token.issued", EventStatus: "issued", Payload: map[string]any{"client_id": operatorTokenMintClientID, "scope": scope, "resource": resource, "session_id": sessionID}})
+	o.recordAuditEvent(r.Context(), edgeAuditEvent{ActorSubjectSub: subjectSub, ServiceID: resolution.ServiceID, EventType: "oauth.operator_token.issued", EventStatus: "issued", Payload: map[string]any{"client_id": operatorTokenMintClientID, "scope": scope, "resource": resource, "session_id": sessionID}})
 	writeJSON(w, http.StatusCreated, operatorTokenResponse{AccessToken: accessToken, TokenType: "Bearer", ExpiresIn: int64(expiresIn / time.Second), Scope: scope, Resource: resource, SessionID: sessionID, IssuedVia: oauthSessionIssuedViaOperator})
 }
 
@@ -1260,7 +1248,7 @@ func (o *OAuthService) ensureOperatorTokenClient(ctx context.Context) error {
 		GrantTypes:              []string{oauthSessionIssuedViaOperator},
 		ResponseTypes:           []string{},
 		TokenEndpointAuthMethod: tokenEndpointAuthMethodNone,
-		Scopes:                  o.catalog.Scopes(),
+		Scopes:                  o.directory.Scopes(),
 		CreatedAt:               time.Now().UTC(),
 	}, "operator")
 }
@@ -1416,28 +1404,20 @@ func (o *OAuthService) validateTokenResourceIndicator(r *http.Request) (string, 
 	if len(resources) != 1 {
 		return "", fmt.Errorf("exactly one resource indicator is required")
 	}
-	resource := strings.TrimRight(strings.TrimSpace(resources[0]), "/")
-	for _, scope := range o.catalog.Scopes() {
-		serviceID := strings.TrimPrefix(scope, "mcp:")
-		service, ok := o.catalog.ServiceByID(serviceID)
-		if ok && resource == o.publicBaseURL+service.PublicPath {
-			setRequestResourceIndicator(r, resource)
-			return resource, nil
-		}
-	}
-	return "", fmt.Errorf("resource indicator is not registered on this edge")
-}
-
-func (o *OAuthService) resourceForSingleServiceScope(scope string) (string, error) {
-	serviceID, err := singleServiceFromScope(scope)
+	resolution, err := o.directory.ResolveResource(resources[0])
 	if err != nil {
 		return "", err
 	}
-	service, ok := o.catalog.ServiceByID(serviceID)
-	if !ok {
-		return "", fmt.Errorf("requested resource scope is not supported")
+	setRequestResourceIndicator(r, resolution.Resource)
+	return resolution.Resource, nil
+}
+
+func (o *OAuthService) resourceForSingleServiceScope(scope string) (string, error) {
+	resolution, err := o.directory.ResolveScope(scope)
+	if err != nil {
+		return "", err
 	}
-	return o.publicBaseURL + service.PublicPath, nil
+	return resolution.Resource, nil
 }
 
 func setRequestResourceIndicator(r *http.Request, resource string) {
@@ -1603,7 +1583,7 @@ func (o *OAuthService) registerClientMetadataDocument(ctx context.Context, clien
 	if metadata.ClientID != "" && metadata.ClientID != clientID {
 		return nil, fmt.Errorf("client metadata document client_id must match the requested client_id")
 	}
-	record, err := normalizeClientRegistration(metadata, o.catalog.Scopes())
+	record, err := normalizeClientRegistration(metadata, o.directory.Scopes())
 	if err != nil {
 		return nil, err
 	}

@@ -102,6 +102,19 @@ If your platform preserves external named volumes across separate applications, 
 
 Set `MCP_DOCKER_NETWORK` if your external Docker network is not named `coolify`. The control plane also uses this value when it renders tenant workload compose files, so the core stack and tenant services stay on the same external network.
 
+## Edge OAuth lifetime policy
+
+`mcp-edge` accepts Go-duration environment values for OAuth client lifetimes, plus an operator-friendly whole-day suffix such as `7d`:
+
+- `MCP_EDGE_OAUTH_ACCESS_TOKEN_TTL` defaults to `2h` and is capped at `24h`.
+- `MCP_EDGE_OAUTH_REFRESH_TOKEN_TTL` defaults to `72h` and is capped at `30d`.
+- `MCP_EDGE_OAUTH_AUTHORIZATION_CODE_TTL` defaults to `10m` and is capped at `30m`.
+- `MCP_EDGE_OAUTH_DEVICE_CODE_TTL` defaults to `10m` and is capped at `30m`.
+
+Prefer increasing refresh-token TTL before increasing access-token TTL. Access tokens are bearer credentials; longer access TTLs increase the replay window if a token leaks. Refresh-token TTL controls how long well-behaved clients can renew without a new browser or device approval. A practical starting point for less frequent reauth is `MCP_EDGE_OAUTH_REFRESH_TOKEN_TTL=7d` while keeping access tokens at `2h`.
+
+Changing these values affects newly issued or refreshed OAuth tokens after `mcp-edge` restarts. Existing token rows keep their stored expiry.
+
 ## Tenant image mode
 
 `MCP_CONTROL_PLANE_TENANT_IMAGE_MODE` controls validation for tenant runtime images:

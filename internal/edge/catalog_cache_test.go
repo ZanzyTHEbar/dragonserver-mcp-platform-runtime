@@ -135,6 +135,91 @@ func TestRootDiscoveryReturnsCatalogAndMetadataLinks(t *testing.T) {
 	require.Equal(t, "https://mcp.example.com/oauth/register", oauth["registration_endpoint"])
 }
 
+func TestCanonicalServiceMetadataAcrossDiscoveryAndWellKnown(t *testing.T) {
+	t.Parallel()
+
+	server := newTestEdgeServer(t, nil)
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	require.Equal(t, http.StatusOK, res.Code)
+
+	var discovery struct {
+		Services []struct {
+			ID                           string `json:"id"`
+			DisplayName                  string `json:"display_name"`
+			Path                         string `json:"path"`
+			URL                          string `json:"url"`
+			Resource                     string `json:"resource"`
+			ProtectedResourceMetadataURL string `json:"protected_resource_metadata_url"`
+			Scope                        string `json:"scope"`
+		} `json:"services"`
+	}
+	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &discovery))
+	require.Len(t, discovery.Services, len(catalog.DefaultCatalogV1()))
+
+	for _, entry := range catalog.DefaultCatalogV1() {
+		resolution, ok := server.serviceDirectory.ResolveByID(entry.ServiceID)
+		require.True(t, ok)
+
+		var discovered struct {
+			ID                           string `json:"id"`
+			DisplayName                  string `json:"display_name"`
+			Path                         string `json:"path"`
+			URL                          string `json:"url"`
+			Resource                     string `json:"resource"`
+			ProtectedResourceMetadataURL string `json:"protected_resource_metadata_url"`
+			Scope                        string `json:"scope"`
+		}
+		found := false
+		for _, service := range discovery.Services {
+			if service.ID == entry.ServiceID {
+				discovered = service
+				found = true
+				break
+			}
+		}
+		require.True(t, found, "missing discovery entry for %s", entry.ServiceID)
+		require.Equal(t, resolution.ServiceID, discovered.ID)
+		require.Equal(t, resolution.Service.DisplayName, discovered.DisplayName)
+		require.Equal(t, resolution.Service.PublicPath, discovered.Path)
+		require.Equal(t, resolution.PublicURL, discovered.URL)
+		require.Equal(t, resolution.Resource, discovered.Resource)
+		require.Equal(t, resolution.ProtectedResourceMetadataURL, discovered.ProtectedResourceMetadataURL)
+		require.Equal(t, resolution.Scope, discovered.Scope)
+
+		assertProtectedResourceMetadata(t, handler, "/.well-known/oauth-protected-resource/"+resolution.ServiceID, resolution)
+		assertProtectedResourceMetadata(t, handler, "/.well-known/oauth-protected-resource"+resolution.Service.PublicPath, resolution)
+		assertAuthorizationServerMetadata(t, handler, "/.well-known/oauth-authorization-server/"+resolution.ServiceID, resolution)
+		assertAuthorizationServerMetadata(t, handler, "/.well-known/oauth-authorization-server"+resolution.Service.PublicPath, resolution)
+	}
+}
+
+func TestBearerChallengeUsesCanonicalServiceMetadata(t *testing.T) {
+	t.Parallel()
+
+	server := newTestEdgeServer(t, nil)
+	handler := server.Handler()
+
+	for _, entry := range catalog.DefaultCatalogV1() {
+		resolution, ok := server.serviceDirectory.ResolveByID(entry.ServiceID)
+		require.True(t, ok)
+
+		req := httptest.NewRequest(http.MethodGet, resolution.Service.PublicPath, nil)
+		res := httptest.NewRecorder()
+		handler.ServeHTTP(res, req)
+
+		require.Equal(t, http.StatusUnauthorized, res.Code)
+		challenge := res.Header().Get("WWW-Authenticate")
+		require.Contains(t, challenge, `Bearer realm="mcp-edge"`)
+		require.Contains(t, challenge, `error="invalid_token"`)
+		require.Contains(t, challenge, `scope="`+resolution.Scope+`"`)
+		require.Contains(t, challenge, `resource_metadata="`+resolution.ProtectedResourceMetadataURL+`"`)
+	}
+}
+
 func TestRootDiscoveryDoesNotExposeCatalogRefreshErrors(t *testing.T) {
 	t.Parallel()
 
@@ -153,6 +238,53 @@ func TestRootDiscoveryDoesNotExposeCatalogRefreshErrors(t *testing.T) {
 	require.Contains(t, res.Body.String(), `"catalog_status":"degraded"`)
 	require.NotContains(t, res.Body.String(), "sqlite failed")
 	require.NotContains(t, res.Body.String(), "/data/private")
+}
+
+func assertProtectedResourceMetadata(t *testing.T, handler http.Handler, path string, resolution ServiceResolution) {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	require.Equal(t, http.StatusOK, res.Code)
+
+	var payload struct {
+		Resource             string   `json:"resource"`
+		ResourceName         string   `json:"resource_name"`
+		AuthorizationServers []string `json:"authorization_servers"`
+		ScopesSupported      []string `json:"scopes_supported"`
+	}
+	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &payload))
+	require.Equal(t, resolution.Resource, payload.Resource)
+	require.Equal(t, resolution.Service.DisplayName, payload.ResourceName)
+	require.Equal(t, []string{resolution.AuthorizationServerIssuer}, payload.AuthorizationServers)
+	require.Equal(t, []string{resolution.Scope}, payload.ScopesSupported)
+}
+
+func assertAuthorizationServerMetadata(t *testing.T, handler http.Handler, path string, resolution ServiceResolution) {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	require.Equal(t, http.StatusOK, res.Code)
+
+	var payload struct {
+		Issuer                       string   `json:"issuer"`
+		AuthorizationEndpoint        string   `json:"authorization_endpoint"`
+		DeviceAuthorizationEndpoint  string   `json:"device_authorization_endpoint"`
+		RegistrationEndpoint         string   `json:"registration_endpoint"`
+		ScopesSupported              []string `json:"scopes_supported"`
+		ResourceIndicatorsSupported  bool     `json:"resource_indicators_supported"`
+		DynamicRegistrationSupported bool     `json:"dynamic_client_registration_supported"`
+	}
+	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &payload))
+	require.Equal(t, resolution.AuthorizationServerIssuer, payload.Issuer)
+	require.Equal(t, resolution.AuthorizationEndpoint, payload.AuthorizationEndpoint)
+	require.Equal(t, resolution.DeviceAuthorizationEndpoint, payload.DeviceAuthorizationEndpoint)
+	require.Equal(t, resolution.RegistrationEndpoint, payload.RegistrationEndpoint)
+	require.Equal(t, []string{resolution.Scope}, payload.ScopesSupported)
+	require.True(t, payload.ResourceIndicatorsSupported)
 }
 
 func TestRootDiscoverySupportsHEAD(t *testing.T) {
@@ -244,6 +376,80 @@ func TestReservedRoutesWinOverDynamicFallback(t *testing.T) {
 	require.Contains(t, res.Body.String(), "live")
 }
 
+func TestReadinessReportsCanonicalMetadataStatus(t *testing.T) {
+	t.Parallel()
+
+	server := newTestEdgeServer(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/health/ready", nil)
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, req)
+
+	require.Equal(t, http.StatusOK, res.Code)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &payload))
+	require.Equal(t, "ok", payload["canonical_metadata_status"])
+}
+
+func TestServiceDiagnosticsRequireOperatorTokenAndReportCanonicalMetadata(t *testing.T) {
+	t.Parallel()
+
+	server := newTestEdgeServer(t, nil)
+	handler := server.Handler()
+
+	req := httptest.NewRequest(http.MethodGet, "/health/diagnostics/services", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	require.Equal(t, http.StatusUnauthorized, res.Code)
+
+	req = httptest.NewRequest(http.MethodGet, "/health/diagnostics/services", nil)
+	req.Header.Set("Authorization", "Bearer fixture-operator-token")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	require.Equal(t, http.StatusOK, res.Code)
+
+	var payload struct {
+		Status   string `json:"status"`
+		Services []struct {
+			ID               string   `json:"id"`
+			Resource         string   `json:"resource"`
+			Scope            string   `json:"scope"`
+			DiagnosticStatus string   `json:"diagnostic_status"`
+			Issues           []string `json:"issues"`
+		} `json:"services"`
+	}
+	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &payload))
+	require.Equal(t, "ok", payload.Status)
+	require.Len(t, payload.Services, len(catalog.DefaultCatalogV1()))
+	for _, service := range payload.Services {
+		require.NotEmpty(t, service.ID)
+		require.NotEmpty(t, service.Resource)
+		require.NotEmpty(t, service.Scope)
+		require.Equal(t, "ok", service.DiagnosticStatus)
+		require.Empty(t, service.Issues)
+	}
+}
+
+func TestServiceMetadataDiagnosticsDetectInvalidCanonicalURLs(t *testing.T) {
+	t.Parallel()
+
+	issues := serviceMetadataIssues(ServiceResolution{
+		ServiceID:                    "bad",
+		Scope:                        "mcp:bad",
+		Resource:                     "mcp.example.com/bad/mcp",
+		PublicURL:                    "mcp.example.com/bad/mcp",
+		ProtectedResourceMetadataURL: "mcp.example.com/.well-known/oauth-protected-resource/bad",
+		AuthorizationServerIssuer:    "mcp.example.com/bad",
+		AuthorizationEndpoint:        "mcp.example.com/oauth/authorize/bad",
+		DeviceAuthorizationEndpoint:  "mcp.example.com/oauth/device_authorization/bad",
+		RegistrationEndpoint:         "mcp.example.com/oauth/register/bad",
+	})
+
+	require.Contains(t, issues, "invalid_resource")
+	require.Contains(t, issues, "invalid_public_url")
+	require.Contains(t, issues, "invalid_protected_resource_metadata_url")
+	require.Contains(t, issues, "invalid_authorization_server")
+}
+
 func TestCORSPreflightAllowsMCPTransportHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -302,14 +508,18 @@ func (s *mutableCatalogStore) ListEnabledServiceCatalog(context.Context) ([]cata
 
 func testEdgeConfig() Config {
 	return Config{
-		PlatformEnv:           "test",
-		PublicBaseURL:         "https://mcp.example.com",
-		CookieSecure:          false,
-		CORSAllowedOrigins:    []string{"*"},
-		EnableFixtureMode:     true,
-		FixtureAuthSubjectSub: "fixture-user",
-		FixtureAuthGroups:     []string{"mcp-users", "mcp-service-mealie"},
-		FixtureOperatorToken:  "fixture-operator-token",
+		PlatformEnv:               "test",
+		PublicBaseURL:             "https://mcp.example.com",
+		CookieSecure:              false,
+		CORSAllowedOrigins:        []string{"*"},
+		EnableFixtureMode:         true,
+		OAuthAccessTokenTTL:       defaultOAuthAccessTokenTTL,
+		OAuthRefreshTokenTTL:      defaultOAuthRefreshTokenTTL,
+		OAuthAuthorizationCodeTTL: defaultOAuthAuthorizationCodeTTL,
+		OAuthDeviceCodeTTL:        defaultOAuthDeviceCodeTTL,
+		FixtureAuthSubjectSub:     "fixture-user",
+		FixtureAuthGroups:         []string{"mcp-users", "mcp-service-mealie"},
+		FixtureOperatorToken:      "fixture-operator-token",
 	}
 }
 

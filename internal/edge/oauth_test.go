@@ -14,6 +14,7 @@ import (
 
 	"dragonserver/mcp-platform/internal/ids"
 
+	oauth2 "github.com/go-oauth2/oauth2/v4"
 	"github.com/go-oauth2/oauth2/v4/models"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -558,6 +559,47 @@ func TestOAuthGlobalMultiScopeAuthorizeWithoutResourceFails(t *testing.T) {
 	require.Contains(t, res.Body.String(), "exactly one mcp")
 }
 
+func TestOAuthResourceValidationUsesCanonicalServiceResource(t *testing.T) {
+	server := newTestEdgeServer(t, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?scope=mcp:mealie", nil)
+	resource, err := server.oauth.validateResourceIndicator(req, "mcp:mealie")
+	require.NoError(t, err)
+	require.Equal(t, "https://mcp.example.com/mealie/mcp", resource)
+	require.Equal(t, resource, req.URL.Query().Get("resource"))
+
+	form := url.Values{}
+	form.Set("resource", "https://mcp.example.com/mealie/mcp/")
+	req = httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resource, err = server.oauth.validateTokenResourceIndicator(req)
+	require.NoError(t, err)
+	require.Equal(t, "https://mcp.example.com/mealie/mcp", resource)
+	require.Equal(t, resource, req.Form.Get("resource"))
+
+	form = url.Values{}
+	form.Set("resource", "https://mcp.example.com/actualbudget/mcp")
+	req = httptest.NewRequest(http.MethodPost, "/oauth/authorize?scope=mcp:mealie", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_, err = server.oauth.validateResourceIndicator(req, "mcp:mealie")
+	require.ErrorContains(t, err, "resource indicator must match the requested MCP service")
+
+	form = url.Values{}
+	form.Add("resource", "https://mcp.example.com/mealie/mcp")
+	form.Add("resource", "https://mcp.example.com/actualbudget/mcp")
+	req = httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_, err = server.oauth.validateTokenResourceIndicator(req)
+	require.ErrorContains(t, err, "exactly one resource indicator is required")
+
+	form = url.Values{}
+	form.Set("resource", "https://mcp.example.com/notregistered/mcp")
+	req = httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_, err = server.oauth.validateTokenResourceIndicator(req)
+	require.ErrorContains(t, err, "resource indicator is not registered on this edge")
+}
+
 func TestOAuthRegistrationAllowsDeviceOnlyClientWithoutRedirectURI(t *testing.T) {
 	server := newTestEdgeServer(t, nil)
 	handler := server.Handler()
@@ -679,7 +721,11 @@ func TestOAuthDeviceAuthorizationIssuesTokenAfterApproval(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	server := newTestEdgeServer(t, urlResolver{targets: map[string]string{"mealie": upstream.URL}})
+	cfg := testEdgeConfig()
+	cfg.OAuthAccessTokenTTL = 3 * time.Hour
+	cfg.OAuthRefreshTokenTTL = 14 * 24 * time.Hour
+	cfg.OAuthDeviceCodeTTL = 20 * time.Minute
+	server := newTestEdgeServerWithConfig(t, cfg, urlResolver{targets: map[string]string{"mealie": upstream.URL}})
 	handler := server.Handler()
 
 	registrationBody := `{
@@ -713,6 +759,7 @@ func TestOAuthDeviceAuthorizationIssuesTokenAfterApproval(t *testing.T) {
 	require.NotEmpty(t, deviceResponse.UserCode)
 	require.Equal(t, "https://mcp.example.com/oauth/device", deviceResponse.VerificationURI)
 	require.Contains(t, deviceResponse.VerificationURIComplete, url.QueryEscape(deviceResponse.UserCode))
+	require.Equal(t, int64((20*time.Minute)/time.Second), deviceResponse.ExpiresIn)
 
 	devicePage := httptest.NewRequest(http.MethodGet, "/oauth/device?user_code="+url.QueryEscape(deviceResponse.UserCode), nil)
 	res = httptest.NewRecorder()
@@ -780,9 +827,14 @@ func TestOAuthDeviceAuthorizationIssuesTokenAfterApproval(t *testing.T) {
 	accessToken, ok := tokenPayload["access_token"].(string)
 	require.True(t, ok)
 	require.NotEmpty(t, accessToken)
+	require.Equal(t, float64((3*time.Hour)/time.Second), tokenPayload["expires_in"])
 	require.Equal(t, "mcp:mealie", tokenPayload["scope"])
 	require.Equal(t, "https://mcp.example.com/mealie/mcp", tokenPayload["resource"])
 	require.NotEmpty(t, tokenPayload["refresh_token"])
+	issuedToken, err := server.stateStore.GetByAccess(context.Background(), accessToken)
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Hour, issuedToken.GetAccessExpiresIn())
+	require.Equal(t, 14*24*time.Hour, issuedToken.GetRefreshExpiresIn())
 
 	serviceRequest := httptest.NewRequest(http.MethodGet, "/mealie/mcp", nil)
 	serviceRequest.Header.Set("Authorization", "Bearer "+accessToken)
@@ -1099,7 +1151,10 @@ func TestOAuthRegistrationAuthorizationCodeAndIntrospection(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	server := newTestEdgeServer(t, urlResolver{
+	cfg := testEdgeConfig()
+	cfg.OAuthAccessTokenTTL = 4 * time.Hour
+	cfg.OAuthRefreshTokenTTL = 10 * 24 * time.Hour
+	server := newTestEdgeServerWithConfig(t, cfg, urlResolver{
 		targets: map[string]string{
 			"mealie": upstream.URL,
 		},
@@ -1196,6 +1251,11 @@ func TestOAuthRegistrationAuthorizationCodeAndIntrospection(t *testing.T) {
 	refreshToken, ok := tokenPayload["refresh_token"].(string)
 	require.True(t, ok)
 	require.NotEmpty(t, refreshToken)
+	require.Equal(t, float64((4*time.Hour)/time.Second), tokenPayload["expires_in"])
+	issuedToken, err := server.stateStore.GetByAccess(context.Background(), accessToken)
+	require.NoError(t, err)
+	require.Equal(t, 4*time.Hour, issuedToken.GetAccessExpiresIn())
+	require.Equal(t, 10*24*time.Hour, issuedToken.GetRefreshExpiresIn())
 
 	introspectionForm := url.Values{}
 	introspectionForm.Set("token", accessToken)
@@ -1289,6 +1349,26 @@ func TestOAuthRegistrationAuthorizationCodeAndIntrospection(t *testing.T) {
 	require.True(t, ok)
 	require.NotEmpty(t, newAccessToken)
 	require.NotEqual(t, accessToken, newAccessToken)
+	newRefreshToken, ok := refreshPayload["refresh_token"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, newRefreshToken)
+	require.NotEqual(t, refreshToken, newRefreshToken)
+	require.Equal(t, float64((4*time.Hour)/time.Second), refreshPayload["expires_in"])
+	refreshedToken, err := server.stateStore.GetByAccess(context.Background(), newAccessToken)
+	require.NoError(t, err)
+	require.Equal(t, 4*time.Hour, refreshedToken.GetAccessExpiresIn())
+	require.Equal(t, 10*24*time.Hour, refreshedToken.GetRefreshExpiresIn())
+
+	reuseRefreshForm := url.Values{}
+	reuseRefreshForm.Set("grant_type", "refresh_token")
+	reuseRefreshForm.Set("refresh_token", refreshToken)
+	reuseRefreshForm.Set("client_id", registration.ClientID)
+	reuseRefreshForm.Set("resource", "https://mcp.example.com/mealie/mcp")
+	req = httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(reuseRefreshForm.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res = httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	require.NotEqual(t, http.StatusOK, res.Code)
 
 	introspectionForm.Set("token", accessToken)
 	req = httptest.NewRequest(http.MethodPost, "/oauth/introspect", strings.NewReader(introspectionForm.Encode()))
@@ -1325,6 +1405,66 @@ func TestOAuthRegistrationAuthorizationCodeAndIntrospection(t *testing.T) {
 	requireAuditEvent(t, events, "oauth.introspect", "active")
 	requireAuditEvent(t, events, "oauth.introspect", "inactive")
 	requireAuditEvent(t, events, "mcp.service.access.allowed", "allowed")
+}
+
+func TestOAuthManagerUsesConfiguredAuthorizationAndRefreshLifetimes(t *testing.T) {
+	cfg := testEdgeConfig()
+	cfg.OAuthAccessTokenTTL = 5 * time.Hour
+	cfg.OAuthRefreshTokenTTL = 21 * 24 * time.Hour
+	cfg.OAuthAuthorizationCodeTTL = 15 * time.Minute
+	server := newTestEdgeServerWithConfig(t, cfg, nil)
+
+	client := registeredClient{
+		ID:                      "configured-lifetime-client",
+		Name:                    "Configured Lifetime Client",
+		RedirectURIs:            []string{"https://client.example.com/callback"},
+		GrantTypes:              []string{oauthGrantAuthorizationCode, oauthGrantRefreshToken},
+		ResponseTypes:           []string{"code"},
+		TokenEndpointAuthMethod: "none",
+		Scopes:                  []string{"mcp:mealie"},
+		CreatedAt:               time.Now().UTC(),
+	}
+	require.NoError(t, server.stateStore.CreateClient(context.Background(), client, "fixture-user"))
+
+	authRequest := httptest.NewRequest(http.MethodGet, "/oauth/authorize", nil)
+	authRequest.Form = url.Values{"resource": {"https://mcp.example.com/mealie/mcp"}}
+	authToken, err := server.oauth.manager.GenerateAuthToken(context.Background(), oauth2.Code, &oauth2.TokenGenerateRequest{
+		ClientID:    client.ID,
+		UserID:      "fixture-user",
+		RedirectURI: client.RedirectURIs[0],
+		Scope:       "mcp:mealie",
+		Request:     authRequest,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Minute, authToken.GetCodeExpiresIn())
+
+	accessRequest := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(url.Values{"resource": {"https://mcp.example.com/mealie/mcp"}}.Encode()))
+	accessRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	require.NoError(t, accessRequest.ParseForm())
+	accessToken, err := server.oauth.manager.GenerateAccessToken(context.Background(), oauth2.AuthorizationCode, &oauth2.TokenGenerateRequest{
+		ClientID:    client.ID,
+		Code:        authToken.GetCode(),
+		RedirectURI: client.RedirectURIs[0],
+		Request:     accessRequest,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Hour, accessToken.GetAccessExpiresIn())
+	require.Equal(t, 21*24*time.Hour, accessToken.GetRefreshExpiresIn())
+	require.NotEmpty(t, accessToken.GetRefresh())
+
+	refreshRequest := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(url.Values{"resource": {"https://mcp.example.com/mealie/mcp"}}.Encode()))
+	refreshRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	require.NoError(t, refreshRequest.ParseForm())
+	refreshedToken, err := server.oauth.manager.RefreshAccessToken(context.Background(), &oauth2.TokenGenerateRequest{
+		ClientID: client.ID,
+		Refresh:  accessToken.GetRefresh(),
+		Request:  refreshRequest,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Hour, refreshedToken.GetAccessExpiresIn())
+	require.Equal(t, 21*24*time.Hour, refreshedToken.GetRefreshExpiresIn())
+	require.NotEqual(t, accessToken.GetAccess(), refreshedToken.GetAccess())
+	require.NotEqual(t, accessToken.GetRefresh(), refreshedToken.GetRefresh())
 }
 
 func countAuditEvents(events []edgeAuditEvent, eventType string, status string) int {
@@ -1597,12 +1737,17 @@ func TestNewServerFailsWithoutExplicitAuthMode(t *testing.T) {
 
 func newTestEdgeServer(t *testing.T, resolver Resolver) *Server {
 	t.Helper()
+	return newTestEdgeServerWithConfig(t, testEdgeConfig(), resolver)
+}
+
+func newTestEdgeServerWithConfig(t *testing.T, cfg Config, resolver Resolver) *Server {
+	t.Helper()
 	if resolver == nil {
 		resolver = staticResolver{}
 	}
 
 	server, err := NewServer(
-		testEdgeConfig(),
+		cfg,
 		zerolog.New(httptest.NewRecorder()),
 		resolver,
 	)

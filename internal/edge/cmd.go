@@ -20,7 +20,10 @@ func NewRootCommand() *cobra.Command {
 		Use:   "mcp-edge",
 		Short: "Run the MCP shared edge",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := LoadConfig()
+			cfg, err := LoadConfig()
+			if err != nil {
+				return err
+			}
 			if err := cfg.Validate(); err != nil {
 				return err
 			}

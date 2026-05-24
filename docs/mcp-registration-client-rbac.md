@@ -149,6 +149,15 @@ If `MCP_EDGE_CIMD_ENABLED=true`, the edge also accepts HTTPS Client ID Metadata 
 
 CORS is disabled unless `MCP_EDGE_CORS_ALLOWED_ORIGINS` is set. Use a comma-separated allowlist for browser-based clients, or `*` only when bearer-token exposure to any browser origin is acceptable for your deployment.
 
+OAuth client lifetimes are operator policy, not dynamic client registration metadata. Configure them on `mcp-edge` with duration env vars:
+
+- `MCP_EDGE_OAUTH_ACCESS_TOKEN_TTL` defaults to `2h` and is capped at `24h`.
+- `MCP_EDGE_OAUTH_REFRESH_TOKEN_TTL` defaults to `72h` and is capped at `30d`.
+- `MCP_EDGE_OAUTH_AUTHORIZATION_CODE_TTL` defaults to `10m` and is capped at `30m`.
+- `MCP_EDGE_OAUTH_DEVICE_CODE_TTL` defaults to `10m` and is capped at `30m`.
+
+Use Go duration syntax such as `2h`, `168h`, or the edge-supported whole-day suffix such as `7d`. Prefer increasing refresh-token TTL before increasing access-token TTL. Existing issued tokens keep their stored expiry; changed env values apply to newly issued or refreshed tokens after `mcp-edge` restarts.
+
 ### Headless Client Authentication
 
 The edge supports two production-safe headless modes. Both modes issue normal edge opaque bearer tokens. MCP service routes still enforce token validity, exact service scope, exact resource binding, current subject grant, and tenant readiness.

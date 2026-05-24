@@ -29,6 +29,7 @@ type Server struct {
 	publicURL                 string
 	resolver                  Resolver
 	catalogCache              *CatalogCache
+	serviceDirectory          *ServiceDirectory
 	fixtureInsecureSkipVerify bool
 	corsAllowedOrigins        []string
 	stateStore                edgeStateStore
@@ -87,7 +88,8 @@ func NewServerWithStateStore(ctx context.Context, cfg Config, logger zerolog.Log
 		}
 		return nil, err
 	}
-	oauthService, err := NewOAuthService(cfg, logger, catalogCache, stateStore, authRuntime, authRuntime)
+	serviceDirectory := NewServiceDirectory(cfg.PublicBaseURL, catalogCache)
+	oauthService, err := NewOAuthService(cfg, logger, catalogCache, serviceDirectory, stateStore, authRuntime, authRuntime)
 	if err != nil {
 		if stateStoreOwned {
 			_ = stateStore.Close()
@@ -100,6 +102,7 @@ func NewServerWithStateStore(ctx context.Context, cfg Config, logger zerolog.Log
 		publicURL:                 strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/"),
 		resolver:                  resolver,
 		catalogCache:              catalogCache,
+		serviceDirectory:          serviceDirectory,
 		fixtureInsecureSkipVerify: cfg.FixtureInsecureSkipVerify,
 		corsAllowedOrigins:        append([]string(nil), cfg.CORSAllowedOrigins...),
 		stateStore:                stateStore,
@@ -133,6 +136,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health/live", s.handleLiveness)
 	mux.HandleFunc("/health/ready", s.handleReadiness)
+	mux.HandleFunc("/health/diagnostics/services", s.handleServiceDiagnostics)
 	mux.HandleFunc("/health", s.handleReadiness)
 	s.auth.RegisterRoutes(mux)
 	s.oauth.RegisterRoutes(mux)
@@ -179,25 +183,130 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	if s.stateStore != nil {
 		if err := s.stateStore.Ping(r.Context()); err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"status":            "not_ready",
-				"public_base_url":   s.publicURL,
-				"services":          s.catalogCache.Len(),
-				"catalog_loaded_at": s.catalogCache.LoadedAt(),
-				"catalog_error":     s.catalogCache.LastError(),
-				"error":             "state_store_unavailable",
-				"ts":                time.Now().UTC(),
+				"status":                    "not_ready",
+				"public_base_url":           s.publicURL,
+				"services":                  s.catalogCache.Len(),
+				"catalog_loaded_at":         s.catalogCache.LoadedAt(),
+				"catalog_error":             s.catalogCache.LastError(),
+				"canonical_metadata_status": s.canonicalMetadataStatus(),
+				"error":                     "state_store_unavailable",
+				"ts":                        time.Now().UTC(),
 			})
 			return
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":            "ready",
-		"public_base_url":   s.publicURL,
-		"services":          s.catalogCache.Len(),
-		"catalog_loaded_at": s.catalogCache.LoadedAt(),
-		"catalog_error":     s.catalogCache.LastError(),
-		"ts":                time.Now().UTC(),
+		"status":                    "ready",
+		"public_base_url":           s.publicURL,
+		"services":                  s.catalogCache.Len(),
+		"catalog_loaded_at":         s.catalogCache.LoadedAt(),
+		"catalog_error":             s.catalogCache.LastError(),
+		"canonical_metadata_status": s.canonicalMetadataStatus(),
+		"ts":                        time.Now().UTC(),
 	})
+}
+
+func (s *Server) handleServiceDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeJSONError(w, http.StatusMethodNotAllowed, "method_not_allowed", "service diagnostics requires GET")
+		return
+	}
+	if s.oauth == nil || !s.oauth.requireOperatorToken(w, r) {
+		return
+	}
+	status, services := s.serviceMetadataDiagnostics()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":            status,
+		"public_base_url":   s.publicURL,
+		"catalog_loaded_at": s.catalogCache.LoadedAt(),
+		"catalog_status":    catalogStatus(s.catalogCache.LastError()),
+		"services":          services,
+	})
+}
+
+func (s *Server) canonicalMetadataStatus() string {
+	status, _ := s.serviceMetadataDiagnostics()
+	return status
+}
+
+func (s *Server) serviceMetadataDiagnostics() (string, []map[string]any) {
+	status := "ok"
+	services := make([]map[string]any, 0)
+	snapshot := s.catalogCache.Current()
+	if snapshot == nil {
+		return "degraded", services
+	}
+	services = make([]map[string]any, 0, len(snapshot.entries))
+	for _, service := range snapshot.entries {
+		resolution := s.serviceDirectory.Canonicalize(service)
+		issues := serviceMetadataIssues(resolution)
+		if len(issues) > 0 {
+			status = "degraded"
+		}
+		services = append(services, map[string]any{
+			"id":                              resolution.ServiceID,
+			"path":                            resolution.Service.PublicPath,
+			"resource":                        resolution.Resource,
+			"scope":                           resolution.Scope,
+			"authorization_server":            resolution.AuthorizationServerIssuer,
+			"authorization_endpoint":          resolution.AuthorizationEndpoint,
+			"device_authorization_endpoint":   resolution.DeviceAuthorizationEndpoint,
+			"registration_endpoint":           resolution.RegistrationEndpoint,
+			"protected_resource_metadata_url": resolution.ProtectedResourceMetadataURL,
+			"diagnostic_status":               diagnosticStatus(issues),
+			"issues":                          issues,
+		})
+	}
+	return status, services
+}
+
+func serviceMetadataIssues(resolution ServiceResolution) []string {
+	issues := make([]string, 0)
+	if strings.TrimSpace(resolution.ServiceID) == "" {
+		issues = append(issues, "missing_service_id")
+	}
+	if strings.TrimSpace(resolution.Scope) == "" || !strings.HasPrefix(resolution.Scope, "mcp:") {
+		issues = append(issues, "invalid_scope")
+	}
+	if strings.TrimSpace(resolution.Resource) == "" || resolution.Resource != resolution.PublicURL {
+		issues = append(issues, "invalid_resource")
+	}
+	for label, rawURL := range map[string]string{
+		"resource":                        resolution.Resource,
+		"public_url":                      resolution.PublicURL,
+		"protected_resource_metadata_url": resolution.ProtectedResourceMetadataURL,
+		"authorization_server":            resolution.AuthorizationServerIssuer,
+		"authorization_endpoint":          resolution.AuthorizationEndpoint,
+		"device_authorization_endpoint":   resolution.DeviceAuthorizationEndpoint,
+		"registration_endpoint":           resolution.RegistrationEndpoint,
+	} {
+		if !absoluteHTTPURL(rawURL) {
+			issues = append(issues, "invalid_"+label)
+		}
+	}
+	if strings.TrimSpace(resolution.ProtectedResourceMetadataURL) == "" {
+		issues = append(issues, "missing_protected_resource_metadata_url")
+	}
+	if strings.TrimSpace(resolution.AuthorizationServerIssuer) == "" {
+		issues = append(issues, "missing_authorization_server")
+	}
+	return issues
+}
+
+func absoluteHTTPURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	return (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != ""
+}
+
+func diagnosticStatus(issues []string) string {
+	if len(issues) == 0 {
+		return "ok"
+	}
+	return "degraded"
 }
 
 func (s *Server) handleServiceRequest(w http.ResponseWriter, r *http.Request) {
@@ -206,12 +315,12 @@ func (s *Server) handleServiceRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	service, ok := s.catalogCache.MatchPublicPath(r.URL.Path)
+	resolution, ok := s.serviceDirectory.ResolveByPublicPath(r.URL.Path)
 	if !ok {
 		writeJSONError(w, http.StatusNotFound, "service_not_found", "requested service is not registered on this edge")
 		return
 	}
-	s.handleServiceRoute(service)(w, r)
+	s.handleServiceRoute(resolution)(w, r)
 }
 
 func (s *Server) handleRootDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -225,16 +334,16 @@ func (s *Server) handleRootDiscovery(w http.ResponseWriter, r *http.Request) {
 	if snapshot := s.catalogCache.Current(); snapshot != nil {
 		services = make([]map[string]any, 0, len(snapshot.entries))
 		for _, service := range snapshot.entries {
-			serviceURL := s.publicURL + service.PublicPath
+			resolution := s.serviceDirectory.Canonicalize(service)
 			services = append(services, map[string]any{
-				"id":                              service.ServiceID,
-				"display_name":                    service.DisplayName,
-				"path":                            service.PublicPath,
-				"url":                             serviceURL,
-				"resource":                        serviceURL,
-				"protected_resource_metadata_url": s.publicURL + "/.well-known/oauth-protected-resource/" + service.ServiceID,
-				"scope":                           "mcp:" + service.ServiceID,
-				"transport":                       service.TransportType,
+				"id":                              resolution.ServiceID,
+				"display_name":                    resolution.Service.DisplayName,
+				"path":                            resolution.Service.PublicPath,
+				"url":                             resolution.PublicURL,
+				"resource":                        resolution.Resource,
+				"protected_resource_metadata_url": resolution.ProtectedResourceMetadataURL,
+				"scope":                           resolution.Scope,
+				"transport":                       resolution.Service.TransportType,
 			})
 		}
 	}
@@ -268,13 +377,14 @@ func catalogStatus(lastError string) string {
 	return "degraded"
 }
 
-func (s *Server) handleServiceRoute(service catalog.ServiceCatalogEntry) http.HandlerFunc {
+func (s *Server) handleServiceRoute(resolution ServiceResolution) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		service := resolution.Service
 
 		tokenInfo, err := s.oauth.ValidateBearerToken(r)
 		if err != nil {
-			w.Header().Set("WWW-Authenticate", s.bearerChallenge(service, "invalid_token"))
+			w.Header().Set("WWW-Authenticate", s.bearerChallenge(resolution, "invalid_token"))
 			s.recordAuditEvent(r.Context(), edgeAuditEvent{
 				ServiceID:   service.ServiceID,
 				EventType:   "mcp.service.access.denied",
@@ -286,8 +396,8 @@ func (s *Server) handleServiceRoute(service catalog.ServiceCatalogEntry) http.Ha
 			writeJSONError(w, http.StatusUnauthorized, "invalid_token", "a valid bearer token is required for MCP service access")
 			return
 		}
-		if !scopeIncludesService(tokenInfo.GetScope(), service.ServiceID) {
-			w.Header().Set("WWW-Authenticate", s.bearerChallenge(service, "insufficient_scope"))
+		if !scopeIncludes(tokenInfo.GetScope(), resolution.Scope) {
+			w.Header().Set("WWW-Authenticate", s.bearerChallenge(resolution, "insufficient_scope"))
 			s.recordAuditEvent(r.Context(), edgeAuditEvent{
 				ActorSubjectSub: tokenInfo.GetUserID(),
 				ServiceID:       service.ServiceID,
@@ -300,8 +410,8 @@ func (s *Server) handleServiceRoute(service catalog.ServiceCatalogEntry) http.Ha
 			writeJSONError(w, http.StatusForbidden, "insufficient_scope", "token scope does not cover this MCP service")
 			return
 		}
-		if tokenInfoResource(tokenInfo) != strings.TrimRight(s.publicURL, "/")+service.PublicPath {
-			w.Header().Set("WWW-Authenticate", s.bearerChallenge(service, "invalid_token"))
+		if tokenInfoResource(tokenInfo) != resolution.Resource {
+			w.Header().Set("WWW-Authenticate", s.bearerChallenge(resolution, "invalid_token"))
 			s.recordAuditEvent(r.Context(), edgeAuditEvent{
 				ActorSubjectSub: tokenInfo.GetUserID(),
 				ServiceID:       service.ServiceID,
@@ -456,10 +566,8 @@ func (s *Server) sseBridge(target *url.URL, publicPath string, upstreamPath stri
 	return bridge
 }
 
-func (s *Server) bearerChallenge(service catalog.ServiceCatalogEntry, errorCode string) string {
-	scope := "mcp:" + service.ServiceID
-	metadataURL := strings.TrimRight(s.publicURL, "/") + "/.well-known/oauth-protected-resource/" + service.ServiceID
-	return `Bearer realm="mcp-edge", error="` + errorCode + `", scope="` + scope + `", resource_metadata="` + metadataURL + `"`
+func (s *Server) bearerChallenge(resolution ServiceResolution, errorCode string) string {
+	return `Bearer realm="mcp-edge", error="` + errorCode + `", scope="` + resolution.Scope + `", resource_metadata="` + resolution.ProtectedResourceMetadataURL + `"`
 }
 
 func (s *Server) withCORS(next http.Handler) http.Handler {
@@ -545,10 +653,13 @@ func writeJSONError(w http.ResponseWriter, statusCode int, code string, message 
 }
 
 func scopeIncludesService(scope string, serviceID string) bool {
+	return scopeIncludes(scope, "mcp:"+serviceID)
+}
+
+func scopeIncludes(scope string, targetScope string) bool {
 	if strings.TrimSpace(scope) == "" {
 		return false
 	}
-	targetScope := "mcp:" + serviceID
 	for _, scopeEntry := range strings.Fields(scope) {
 		if scopeEntry == targetScope {
 			return true

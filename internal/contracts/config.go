@@ -22,6 +22,10 @@ const (
 	EnvEdgeCORSAllowedOrigins        = "MCP_EDGE_CORS_ALLOWED_ORIGINS"
 	EnvEdgeDCREnabled                = "MCP_EDGE_DCR_ENABLED"
 	EnvEdgeCIMDEnabled               = "MCP_EDGE_CIMD_ENABLED"
+	EnvEdgeOAuthAccessTokenTTL       = "MCP_EDGE_OAUTH_ACCESS_TOKEN_TTL"
+	EnvEdgeOAuthRefreshTokenTTL      = "MCP_EDGE_OAUTH_REFRESH_TOKEN_TTL"
+	EnvEdgeOAuthAuthorizationCodeTTL = "MCP_EDGE_OAUTH_AUTHORIZATION_CODE_TTL"
+	EnvEdgeOAuthDeviceCodeTTL        = "MCP_EDGE_OAUTH_DEVICE_CODE_TTL"
 )
 
 const (
