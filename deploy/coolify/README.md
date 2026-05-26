@@ -103,6 +103,10 @@ If your platform preserves external named volumes across separate applications, 
 
 Set `MCP_DOCKER_NETWORK` if your external Docker network is not named `coolify`. The control plane also uses this value when it renders tenant workload compose files, so the core stack and tenant services stay on the same external network.
 
+## Host-published upstreams
+
+The control-plane and edge templates define `host.docker.internal` as Docker's `host-gateway`. Use this only for admin-trusted static upstreams that are intentionally exposed on the Docker host, such as a separately managed Coolify application without a stable Docker network alias. Prefer service DNS names on the shared Docker network when they exist.
+
 ## Edge OAuth lifetime policy
 
 `mcp-edge` accepts Go-duration environment values for OAuth client lifetimes, plus an operator-friendly whole-day suffix such as `7d`:

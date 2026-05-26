@@ -94,6 +94,8 @@ services:
     depends_on:
       infisical-bridge:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - coolify
 
@@ -161,6 +163,8 @@ services:
     depends_on:
       mcp-control-plane:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - coolify
 
