@@ -21,54 +21,48 @@ const (
 	maxOAuthAuthorizationCodeTTL     = 30 * time.Minute
 	maxOAuthDeviceCodeTTL            = 30 * time.Minute
 
-	envEdgeFixtureUpstreamMealieURL       = "MCP_EDGE_FIXTURE_UPSTREAM_MEALIE_URL"
-	envEdgeFixtureUpstreamActualBudgetURL = "MCP_EDGE_FIXTURE_UPSTREAM_ACTUALBUDGET_URL"
-	envEdgeFixtureUpstreamMemoryURL       = "MCP_EDGE_FIXTURE_UPSTREAM_MEMORY_URL"
-	envEdgeFixtureInsecureSkipVerify      = "MCP_EDGE_FIXTURE_INSECURE_SKIP_VERIFY"
-	envEdgeFixtureAuthentikClientSecret   = "MCP_EDGE_FIXTURE_AUTHENTIK_CLIENT_SECRET"
-	envEdgeFixtureAuthSubjectSub          = "MCP_EDGE_FIXTURE_AUTH_SUBJECT_SUB"
-	envEdgeFixtureAuthSubjectEmail        = "MCP_EDGE_FIXTURE_AUTH_SUBJECT_EMAIL"
-	envEdgeFixtureAuthSubjectName         = "MCP_EDGE_FIXTURE_AUTH_SUBJECT_NAME"
-	envEdgeFixtureAuthPreferredUsername   = "MCP_EDGE_FIXTURE_AUTH_PREFERRED_USERNAME"
-	envEdgeFixtureAuthAccountBindingID    = "MCP_EDGE_FIXTURE_AUTH_ACCOUNT_BINDING_ID"
-	envEdgeFixtureAuthGroups              = "MCP_EDGE_FIXTURE_AUTH_GROUPS"
-	envEdgeFixtureOperatorToken           = "MCP_EDGE_FIXTURE_OPERATOR_TOKEN"
+	envEdgeFixtureInsecureSkipVerify    = "MCP_EDGE_FIXTURE_INSECURE_SKIP_VERIFY"
+	envEdgeFixtureAuthentikClientSecret = "MCP_EDGE_FIXTURE_AUTHENTIK_CLIENT_SECRET"
+	envEdgeFixtureAuthSubjectSub        = "MCP_EDGE_FIXTURE_AUTH_SUBJECT_SUB"
+	envEdgeFixtureAuthSubjectEmail      = "MCP_EDGE_FIXTURE_AUTH_SUBJECT_EMAIL"
+	envEdgeFixtureAuthSubjectName       = "MCP_EDGE_FIXTURE_AUTH_SUBJECT_NAME"
+	envEdgeFixtureAuthPreferredUsername = "MCP_EDGE_FIXTURE_AUTH_PREFERRED_USERNAME"
+	envEdgeFixtureAuthAccountBindingID  = "MCP_EDGE_FIXTURE_AUTH_ACCOUNT_BINDING_ID"
+	envEdgeFixtureAuthGroups            = "MCP_EDGE_FIXTURE_AUTH_GROUPS"
+	envEdgeFixtureOperatorToken         = "MCP_EDGE_FIXTURE_OPERATOR_TOKEN"
 )
 
 type Config struct {
-	PlatformEnv                    string
-	LogLevel                       string
-	PlatformDatabaseURL            string
-	HTTPBindAddr                   string
-	PublicBaseURL                  string
-	EnableFixtureMode              bool
-	AuthentikIssuerURL             string
-	AuthentikClientID              string
-	AuthentikClientSecretPath      string
-	OperatorTokenPath              string
-	SessionEncryptionKeyPath       string
-	IdentityHeaderSecretPath       string
-	AccountBindingClaim            string
-	CookieSecure                   bool
-	CORSAllowedOrigins             []string
-	DCREnabled                     bool
-	CIMDEnabled                    bool
-	OAuthAccessTokenTTL            time.Duration
-	OAuthRefreshTokenTTL           time.Duration
-	OAuthAuthorizationCodeTTL      time.Duration
-	OAuthDeviceCodeTTL             time.Duration
-	FixtureUpstreamMealieURL       string
-	FixtureUpstreamActualBudgetURL string
-	FixtureUpstreamMemoryURL       string
-	FixtureInsecureSkipVerify      bool
-	FixtureAuthentikClientSecret   string
-	FixtureAuthSubjectSub          string
-	FixtureAuthSubjectEmail        string
-	FixtureAuthSubjectName         string
-	FixtureAuthPreferredUsername   string
-	FixtureAuthAccountBindingID    string
-	FixtureAuthGroups              []string
-	FixtureOperatorToken           string
+	PlatformEnv                  string
+	LogLevel                     string
+	PlatformDatabaseURL          string
+	HTTPBindAddr                 string
+	PublicBaseURL                string
+	EnableFixtureMode            bool
+	AuthentikIssuerURL           string
+	AuthentikClientID            string
+	AuthentikClientSecretPath    string
+	OperatorTokenPath            string
+	SessionEncryptionKeyPath     string
+	IdentityHeaderSecretPath     string
+	AccountBindingClaim          string
+	CookieSecure                 bool
+	CORSAllowedOrigins           []string
+	DCREnabled                   bool
+	CIMDEnabled                  bool
+	OAuthAccessTokenTTL          time.Duration
+	OAuthRefreshTokenTTL         time.Duration
+	OAuthAuthorizationCodeTTL    time.Duration
+	OAuthDeviceCodeTTL           time.Duration
+	FixtureInsecureSkipVerify    bool
+	FixtureAuthentikClientSecret string
+	FixtureAuthSubjectSub        string
+	FixtureAuthSubjectEmail      string
+	FixtureAuthSubjectName       string
+	FixtureAuthPreferredUsername string
+	FixtureAuthAccountBindingID  string
+	FixtureAuthGroups            []string
+	FixtureOperatorToken         string
 }
 
 func LoadConfig() (Config, error) {
@@ -101,39 +95,36 @@ func LoadConfig() (Config, error) {
 	}
 
 	return Config{
-		PlatformEnv:                    strings.TrimSpace(viper.GetString(contracts.EnvPlatformEnv)),
-		LogLevel:                       strings.TrimSpace(viper.GetString(contracts.EnvPlatformLogLevel)),
-		PlatformDatabaseURL:            strings.TrimSpace(viper.GetString(contracts.EnvPlatformDatabaseURL)),
-		HTTPBindAddr:                   strings.TrimSpace(viper.GetString(contracts.EnvEdgeHTTPBindAddr)),
-		PublicBaseURL:                  strings.TrimSpace(viper.GetString(contracts.EnvEdgePublicBaseURL)),
-		EnableFixtureMode:              viper.GetBool(contracts.EnvEdgeEnableFixtureMode),
-		AuthentikIssuerURL:             strings.TrimSpace(viper.GetString(contracts.EnvEdgeAuthentikIssuerURL)),
-		AuthentikClientID:              strings.TrimSpace(viper.GetString(contracts.EnvEdgeAuthentikClientID)),
-		AuthentikClientSecretPath:      strings.TrimSpace(viper.GetString(contracts.EnvEdgeAuthentikClientSecretPath)),
-		OperatorTokenPath:              strings.TrimSpace(viper.GetString(contracts.EnvEdgeOperatorTokenPath)),
-		SessionEncryptionKeyPath:       strings.TrimSpace(viper.GetString(contracts.EnvEdgeSessionEncryptionKeyPath)),
-		IdentityHeaderSecretPath:       strings.TrimSpace(viper.GetString(contracts.EnvEdgeIdentityHeaderSecretPath)),
-		AccountBindingClaim:            strings.TrimSpace(viper.GetString(contracts.EnvEdgeAccountBindingClaim)),
-		CookieSecure:                   viper.GetBool(contracts.EnvEdgeCookieSecure),
-		CORSAllowedOrigins:             splitCommaSeparated(viper.GetString(contracts.EnvEdgeCORSAllowedOrigins)),
-		DCREnabled:                     viper.GetBool(contracts.EnvEdgeDCREnabled),
-		CIMDEnabled:                    viper.GetBool(contracts.EnvEdgeCIMDEnabled),
-		OAuthAccessTokenTTL:            accessTokenTTL,
-		OAuthRefreshTokenTTL:           refreshTokenTTL,
-		OAuthAuthorizationCodeTTL:      authorizationCodeTTL,
-		OAuthDeviceCodeTTL:             deviceCodeTTL,
-		FixtureUpstreamMealieURL:       strings.TrimSpace(viper.GetString(envEdgeFixtureUpstreamMealieURL)),
-		FixtureUpstreamActualBudgetURL: strings.TrimSpace(viper.GetString(envEdgeFixtureUpstreamActualBudgetURL)),
-		FixtureUpstreamMemoryURL:       strings.TrimSpace(viper.GetString(envEdgeFixtureUpstreamMemoryURL)),
-		FixtureInsecureSkipVerify:      viper.GetBool(envEdgeFixtureInsecureSkipVerify),
-		FixtureAuthentikClientSecret:   strings.TrimSpace(viper.GetString(envEdgeFixtureAuthentikClientSecret)),
-		FixtureAuthSubjectSub:          strings.TrimSpace(viper.GetString(envEdgeFixtureAuthSubjectSub)),
-		FixtureAuthSubjectEmail:        strings.TrimSpace(viper.GetString(envEdgeFixtureAuthSubjectEmail)),
-		FixtureAuthSubjectName:         strings.TrimSpace(viper.GetString(envEdgeFixtureAuthSubjectName)),
-		FixtureAuthPreferredUsername:   strings.TrimSpace(viper.GetString(envEdgeFixtureAuthPreferredUsername)),
-		FixtureAuthAccountBindingID:    strings.TrimSpace(viper.GetString(envEdgeFixtureAuthAccountBindingID)),
-		FixtureAuthGroups:              splitCommaSeparated(viper.GetString(envEdgeFixtureAuthGroups)),
-		FixtureOperatorToken:           strings.TrimSpace(viper.GetString(envEdgeFixtureOperatorToken)),
+		PlatformEnv:                  strings.TrimSpace(viper.GetString(contracts.EnvPlatformEnv)),
+		LogLevel:                     strings.TrimSpace(viper.GetString(contracts.EnvPlatformLogLevel)),
+		PlatformDatabaseURL:          strings.TrimSpace(viper.GetString(contracts.EnvPlatformDatabaseURL)),
+		HTTPBindAddr:                 strings.TrimSpace(viper.GetString(contracts.EnvEdgeHTTPBindAddr)),
+		PublicBaseURL:                strings.TrimSpace(viper.GetString(contracts.EnvEdgePublicBaseURL)),
+		EnableFixtureMode:            viper.GetBool(contracts.EnvEdgeEnableFixtureMode),
+		AuthentikIssuerURL:           strings.TrimSpace(viper.GetString(contracts.EnvEdgeAuthentikIssuerURL)),
+		AuthentikClientID:            strings.TrimSpace(viper.GetString(contracts.EnvEdgeAuthentikClientID)),
+		AuthentikClientSecretPath:    strings.TrimSpace(viper.GetString(contracts.EnvEdgeAuthentikClientSecretPath)),
+		OperatorTokenPath:            strings.TrimSpace(viper.GetString(contracts.EnvEdgeOperatorTokenPath)),
+		SessionEncryptionKeyPath:     strings.TrimSpace(viper.GetString(contracts.EnvEdgeSessionEncryptionKeyPath)),
+		IdentityHeaderSecretPath:     strings.TrimSpace(viper.GetString(contracts.EnvEdgeIdentityHeaderSecretPath)),
+		AccountBindingClaim:          strings.TrimSpace(viper.GetString(contracts.EnvEdgeAccountBindingClaim)),
+		CookieSecure:                 viper.GetBool(contracts.EnvEdgeCookieSecure),
+		CORSAllowedOrigins:           splitCommaSeparated(viper.GetString(contracts.EnvEdgeCORSAllowedOrigins)),
+		DCREnabled:                   viper.GetBool(contracts.EnvEdgeDCREnabled),
+		CIMDEnabled:                  viper.GetBool(contracts.EnvEdgeCIMDEnabled),
+		OAuthAccessTokenTTL:          accessTokenTTL,
+		OAuthRefreshTokenTTL:         refreshTokenTTL,
+		OAuthAuthorizationCodeTTL:    authorizationCodeTTL,
+		OAuthDeviceCodeTTL:           deviceCodeTTL,
+		FixtureInsecureSkipVerify:    viper.GetBool(envEdgeFixtureInsecureSkipVerify),
+		FixtureAuthentikClientSecret: strings.TrimSpace(viper.GetString(envEdgeFixtureAuthentikClientSecret)),
+		FixtureAuthSubjectSub:        strings.TrimSpace(viper.GetString(envEdgeFixtureAuthSubjectSub)),
+		FixtureAuthSubjectEmail:      strings.TrimSpace(viper.GetString(envEdgeFixtureAuthSubjectEmail)),
+		FixtureAuthSubjectName:       strings.TrimSpace(viper.GetString(envEdgeFixtureAuthSubjectName)),
+		FixtureAuthPreferredUsername: strings.TrimSpace(viper.GetString(envEdgeFixtureAuthPreferredUsername)),
+		FixtureAuthAccountBindingID:  strings.TrimSpace(viper.GetString(envEdgeFixtureAuthAccountBindingID)),
+		FixtureAuthGroups:            splitCommaSeparated(viper.GetString(envEdgeFixtureAuthGroups)),
+		FixtureOperatorToken:         strings.TrimSpace(viper.GetString(envEdgeFixtureOperatorToken)),
 	}, nil
 }
 
@@ -211,10 +202,7 @@ func parseDurationConfig(envKey string) (time.Duration, error) {
 }
 
 func (c Config) usesFixtureInputs() bool {
-	return c.FixtureUpstreamMealieURL != "" ||
-		c.FixtureUpstreamActualBudgetURL != "" ||
-		c.FixtureUpstreamMemoryURL != "" ||
-		c.FixtureInsecureSkipVerify ||
+	return c.FixtureInsecureSkipVerify ||
 		c.FixtureAuthentikClientSecret != "" ||
 		c.FixtureAuthSubjectSub != "" ||
 		c.FixtureAuthSubjectEmail != "" ||

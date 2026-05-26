@@ -52,6 +52,10 @@ const controlPlaneLeaseTTL = 2 * time.Minute
 const controlPlaneLeaseRenewInterval = controlPlaneLeaseTTL / 3
 
 var ErrSubjectServiceGrantNotFound = errors.New("subject service grant not found")
+var ErrTenantInstanceNotFound = errors.New("tenant instance not found")
+var ErrMemoryBankProjectNotShareable = errors.New("memory bank project is not shareable")
+var ErrMemoryBankInvalidMetadata = errors.New("memory bank metadata must be valid JSON")
+var ErrMemoryBankShareExpired = errors.New("memory bank share expires_at must be in the future")
 var ErrCatalogBuiltinMutation = errors.New("builtin service catalog entries cannot be changed through the admin API")
 var ErrCatalogPathConflict = errors.New("service public path conflicts with an existing enabled service")
 
@@ -185,6 +189,8 @@ func (s *Store) SeedServiceCatalog(ctx context.Context) error {
 		if err := s.queries.DisableServiceCatalogEntriesNotIn(ctx, platformdb.DisableServiceCatalogEntriesNotInParams{ServiceIds: serviceIDs}); err != nil {
 			return fmt.Errorf("disable stale service catalog entries: %w", err)
 		}
+	} else if err := s.queries.DisableAllBuiltinServiceCatalogEntries(ctx); err != nil {
+		return fmt.Errorf("disable stale service catalog entries: %w", err)
 	}
 	return nil
 }
@@ -491,13 +497,16 @@ func (s *Store) ReconcileDesiredTenants(ctx context.Context) error {
 				}
 				continue
 			}
+			if tenant.DesiredState == domain.TenantDesiredStateDisabled || tenant.DesiredState == domain.TenantDesiredStateDeleted {
+				continue
+			}
 			if err := enableTenantInstance(ctx, q, tenant, spec); err != nil {
 				return err
 			}
 		}
 		for _, key := range mapsSortedKeys(currentTenants) {
 			tenant := currentTenants[key]
-			if _, ok := desiredSpecs[key]; ok || tenant.DesiredState == domain.TenantDesiredStateDeleted {
+			if _, ok := desiredSpecs[key]; ok || tenant.DesiredState == domain.TenantDesiredStateDeleted || tenantRuntimeMode(tenant) == runtimeModeStaticUpstream {
 				continue
 			}
 			if err := q.MarkTenantDesiredDeleted(ctx, platformdb.MarkTenantDesiredDeletedParams{TenantID: tenant.TenantID.Bytes(), DesiredState: string(domain.TenantDesiredStateDeleted)}); err != nil {
@@ -508,12 +517,77 @@ func (s *Store) ReconcileDesiredTenants(ctx context.Context) error {
 	})
 }
 
+func (s *Store) SuspendTenantInstance(ctx context.Context, subjectSub string, serviceID string) error {
+	rows, err := s.queries.MarkTenantDesiredDisabledBySubjectService(ctx, platformdb.MarkTenantDesiredDisabledBySubjectServiceParams{
+		TargetSubjectSub: subjectSub,
+		TargetServiceID:  serviceID,
+	})
+	if err != nil {
+		return fmt.Errorf("suspend tenant %s/%s: %w", subjectSub, serviceID, err)
+	}
+	if rows == 0 {
+		return ErrTenantInstanceNotFound
+	}
+	return nil
+}
+
+func (s *Store) ResumeTenantInstance(ctx context.Context, subjectSub string, serviceID string) error {
+	rows, err := s.queries.MarkTenantDesiredEnabledBySubjectServiceWithGrant(ctx, platformdb.MarkTenantDesiredEnabledBySubjectServiceWithGrantParams{
+		TargetSubjectSub: subjectSub,
+		TargetServiceID:  serviceID,
+	})
+	if err != nil {
+		return fmt.Errorf("resume tenant %s/%s: %w", subjectSub, serviceID, err)
+	}
+	if rows == 0 {
+		grantCount, err := s.queries.CountSubjectServiceGrant(ctx, platformdb.CountSubjectServiceGrantParams{SubjectSub: subjectSub, ServiceID: serviceID})
+		if err != nil {
+			return fmt.Errorf("count service grant for %s/%s: %w", subjectSub, serviceID, err)
+		}
+		if grantCount == 0 {
+			return ErrSubjectServiceGrantNotFound
+		}
+		return ErrTenantInstanceNotFound
+	}
+	return nil
+}
+
 func (s *Store) ListTenantInstances(ctx context.Context) ([]TenantInstance, error) {
 	records, err := s.queries.ListTenantInstances(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list tenant instances: %w", err)
 	}
 	return convertTenantInstances(records)
+}
+
+func (s *Store) GetTenantInstance(ctx context.Context, tenantID ids.UUID) (TenantInstance, error) {
+	record, err := s.queries.GetTenantInstance(ctx, platformdb.GetTenantInstanceParams{TenantID: tenantID.Bytes()})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TenantInstance{}, ErrTenantInstanceNotFound
+		}
+		return TenantInstance{}, fmt.Errorf("get tenant instance %s: %w", tenantID, err)
+	}
+	tenants, err := convertTenantInstances([]platformdb.ListTenantInstancesRow{platformdb.ListTenantInstancesRow(record)})
+	if err != nil {
+		return TenantInstance{}, err
+	}
+	return tenants[0], nil
+}
+
+func (s *Store) GetTenantInstanceBySubjectService(ctx context.Context, subjectSub string, serviceID string) (TenantInstance, error) {
+	record, err := s.queries.GetTenantInstanceBySubjectService(ctx, platformdb.GetTenantInstanceBySubjectServiceParams{SubjectSub: subjectSub, ServiceID: serviceID})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TenantInstance{}, ErrTenantInstanceNotFound
+		}
+		return TenantInstance{}, fmt.Errorf("get tenant instance for %s/%s: %w", subjectSub, serviceID, err)
+	}
+	tenants, err := convertTenantInstances([]platformdb.ListTenantInstancesRow{platformdb.ListTenantInstancesRow(record)})
+	if err != nil {
+		return TenantInstance{}, err
+	}
+	return tenants[0], nil
 }
 
 func (s *Store) RecordReconcileRun(ctx context.Context, input ReconcileRunInput) error {
@@ -569,6 +643,429 @@ func (s *Store) DeleteTenantInstance(ctx context.Context, tenantID ids.UUID) err
 		return fmt.Errorf("delete tenant instance %s: %w", tenantID, err)
 	}
 	return nil
+}
+
+func (s *Store) UpsertMemoryBankProject(ctx context.Context, project MemoryBankProject) (ids.UUID, error) {
+	if project.ProjectID.IsZero() {
+		project.ProjectID = ids.New()
+	}
+	tenant, err := s.GetTenantInstance(ctx, project.OwnerTenantID)
+	if err != nil {
+		return ids.UUID{}, err
+	}
+	if tenant.SubjectSub != project.OwnerSubjectSub || tenant.ServiceID != project.ServiceID {
+		return ids.UUID{}, fmt.Errorf("memory bank project owner tenant mismatch")
+	}
+	metadata, err := normalizeMemoryBankMetadata(project.Metadata)
+	if err != nil {
+		return ids.UUID{}, err
+	}
+	persistedIDBytes, err := s.queries.UpsertMemoryBankProject(ctx, platformdb.UpsertMemoryBankProjectParams{
+		ProjectID:       project.ProjectID.Bytes(),
+		OwnerSubjectSub: project.OwnerSubjectSub,
+		OwnerTenantID:   project.OwnerTenantID.Bytes(),
+		ServiceID:       project.ServiceID,
+		ProjectKey:      project.ProjectKey,
+		DisplayName:     project.DisplayName,
+		RootPath:        project.RootPath,
+		Metadata:        metadata,
+		ArchivedAt:      sqlNullTimePtr(project.ArchivedAt),
+	})
+	if err != nil {
+		return ids.UUID{}, fmt.Errorf("upsert memory bank project %s/%s: %w", project.OwnerSubjectSub, project.ProjectKey, err)
+	}
+	persistedID, err := ids.ParseBytes(persistedIDBytes)
+	if err != nil {
+		return ids.UUID{}, fmt.Errorf("parse memory bank project id: %w", err)
+	}
+	return persistedID, nil
+}
+
+func (s *Store) GetMemoryBankProject(ctx context.Context, projectID ids.UUID) (MemoryBankProject, error) {
+	record, err := s.queries.GetMemoryBankProject(ctx, platformdb.GetMemoryBankProjectParams{ProjectID: projectID.Bytes()})
+	if err != nil {
+		return MemoryBankProject{}, fmt.Errorf("get memory bank project %s: %w", projectID, err)
+	}
+	return convertMemoryBankProject(record)
+}
+
+func (s *Store) GetMemoryBankProjectByOwnerKey(ctx context.Context, ownerSubjectSub string, serviceID string, projectKey string) (MemoryBankProject, error) {
+	record, err := s.queries.GetMemoryBankProjectByOwnerKey(ctx, platformdb.GetMemoryBankProjectByOwnerKeyParams{OwnerSubjectSub: ownerSubjectSub, ServiceID: serviceID, ProjectKey: projectKey})
+	if err != nil {
+		return MemoryBankProject{}, fmt.Errorf("get memory bank project %s/%s/%s: %w", ownerSubjectSub, serviceID, projectKey, err)
+	}
+	return convertMemoryBankProject(platformdb.MemoryBankProject(record))
+}
+
+func (s *Store) ListMemoryBankProjectsByOwner(ctx context.Context, ownerSubjectSub string, serviceID string, includeArchived bool) ([]MemoryBankProject, error) {
+	records, err := s.queries.ListMemoryBankProjectsByOwner(ctx, platformdb.ListMemoryBankProjectsByOwnerParams{
+		OwnerSubjectSub: ownerSubjectSub,
+		ServiceID:       serviceID,
+		IncludeArchived: includeArchived,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list memory bank projects for %s/%s: %w", ownerSubjectSub, serviceID, err)
+	}
+	return convertMemoryBankProjects(records)
+}
+
+func (s *Store) CreateMemoryBankProjectShare(ctx context.Context, share MemoryBankProjectShare) (ids.UUID, error) {
+	if share.ShareID.IsZero() {
+		share.ShareID = ids.New()
+	}
+	if share.State == "" {
+		share.State = "pending"
+	}
+	if share.Source == "" {
+		share.Source = "oauth_consent"
+	}
+	now := time.Now().UTC()
+	if share.ExpiresAt != nil && !share.ExpiresAt.After(now) {
+		return ids.UUID{}, ErrMemoryBankShareExpired
+	}
+	metadata, err := normalizeMemoryBankMetadata(share.Metadata)
+	if err != nil {
+		return ids.UUID{}, err
+	}
+	if err := s.withTx(ctx, func(q *platformdb.Queries) error {
+		if _, err := q.ExpireMemoryBankProjectShares(ctx, platformdb.ExpireMemoryBankProjectSharesParams{Now: formatSQLiteTime(now)}); err != nil {
+			return fmt.Errorf("expire memory bank project shares: %w", err)
+		}
+		rows, err := q.InsertMemoryBankProjectShare(ctx, platformdb.InsertMemoryBankProjectShareParams{
+			ShareID:                share.ShareID.Bytes(),
+			ProjectID:              share.ProjectID.Bytes(),
+			OwnerSubjectSub:        share.OwnerSubjectSub,
+			CollaboratorSubjectSub: share.CollaboratorSubjectSub,
+			Permission:             share.Permission,
+			State:                  share.State,
+			Source:                 share.Source,
+			CreatedBySubjectSub:    share.CreatedBySubjectSub,
+			ExpiresAt:              sqlNullTimePtr(share.ExpiresAt),
+			Metadata:               metadata,
+		})
+		if err != nil {
+			return fmt.Errorf("create memory bank project share %s: %w", share.ProjectID, err)
+		}
+		if rows == 0 {
+			return ErrMemoryBankProjectNotShareable
+		}
+		return nil
+	}); err != nil {
+		return ids.UUID{}, err
+	}
+	return share.ShareID, nil
+}
+
+func normalizeMemoryBankMetadata(metadata json.RawMessage) (string, error) {
+	raw := strings.TrimSpace(string(metadata))
+	if raw == "" {
+		return "{}", nil
+	}
+	if !json.Valid([]byte(raw)) {
+		return "", ErrMemoryBankInvalidMetadata
+	}
+	return raw, nil
+}
+
+func (s *Store) GetMemoryBankProjectShare(ctx context.Context, shareID ids.UUID) (MemoryBankProjectShare, error) {
+	record, err := s.queries.GetMemoryBankProjectShare(ctx, platformdb.GetMemoryBankProjectShareParams{ShareID: shareID.Bytes()})
+	if err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("get memory bank project share %s: %w", shareID, err)
+	}
+	return convertMemoryBankProjectShare(record)
+}
+
+func (s *Store) ListMemoryBankProjectSharesForSubject(ctx context.Context, collaboratorSubjectSub string, includeInactive bool) ([]MemoryBankProjectShare, error) {
+	now := time.Now().UTC()
+	if err := s.expireMemoryBankProjectShares(ctx, now); err != nil {
+		return nil, err
+	}
+	records, err := s.queries.ListMemoryBankProjectSharesForSubject(ctx, platformdb.ListMemoryBankProjectSharesForSubjectParams{
+		CollaboratorSubjectSub: collaboratorSubjectSub,
+		IncludeInactive:        includeInactive,
+		Now:                    formatSQLiteTime(now),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list memory bank shares for %s: %w", collaboratorSubjectSub, err)
+	}
+	return convertMemoryBankProjectShares(records)
+}
+
+func (s *Store) ListMemoryBankProjectSharesForSubjectService(ctx context.Context, collaboratorSubjectSub string, serviceID string, includeInactive bool) ([]MemoryBankProjectShare, error) {
+	now := time.Now().UTC()
+	if err := s.expireMemoryBankProjectShares(ctx, now); err != nil {
+		return nil, err
+	}
+	records, err := s.queries.ListMemoryBankProjectSharesForSubjectService(ctx, platformdb.ListMemoryBankProjectSharesForSubjectServiceParams{
+		CollaboratorSubjectSub: collaboratorSubjectSub,
+		ServiceID:              serviceID,
+		IncludeInactive:        includeInactive,
+		Now:                    formatSQLiteTime(now),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list memory bank shares for %s/%s: %w", collaboratorSubjectSub, serviceID, err)
+	}
+	return convertMemoryBankProjectShares(records)
+}
+
+func (s *Store) ActivateMemoryBankProjectShare(ctx context.Context, shareID ids.UUID, collaboratorSubjectSub string, acceptedAt time.Time) (bool, error) {
+	if err := s.expireMemoryBankProjectShares(ctx, acceptedAt); err != nil {
+		return false, err
+	}
+	rows, err := s.queries.ActivateMemoryBankProjectShare(ctx, platformdb.ActivateMemoryBankProjectShareParams{
+		ShareID:                shareID.Bytes(),
+		CollaboratorSubjectSub: collaboratorSubjectSub,
+		AcceptedAt:             sqlNullTime(acceptedAt),
+	})
+	if err != nil {
+		return false, fmt.Errorf("activate memory bank project share %s: %w", shareID, err)
+	}
+	return rows > 0, nil
+}
+
+func (s *Store) expireMemoryBankProjectShares(ctx context.Context, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if _, err := s.queries.ExpireMemoryBankProjectShares(ctx, platformdb.ExpireMemoryBankProjectSharesParams{Now: formatSQLiteTime(now)}); err != nil {
+		return fmt.Errorf("expire memory bank project shares: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) RevokeMemoryBankProjectShare(ctx context.Context, shareID ids.UUID, revokedAt time.Time) (bool, error) {
+	rows, err := s.queries.RevokeMemoryBankProjectShare(ctx, platformdb.RevokeMemoryBankProjectShareParams{
+		ShareID:   shareID.Bytes(),
+		RevokedAt: sqlNullTime(revokedAt),
+	})
+	if err != nil {
+		return false, fmt.Errorf("revoke memory bank project share %s: %w", shareID, err)
+	}
+	return rows > 0, nil
+}
+
+func (s *Store) RecordTenantRuntimeSpec(ctx context.Context, spec TenantRuntimeSpec) (ids.UUID, error) {
+	if err := s.withTx(ctx, func(q *platformdb.Queries) error {
+		prepared, params, err := s.prepareTenantRuntimeSpec(ctx, q, spec)
+		if err != nil {
+			return err
+		}
+		spec = prepared
+		if err := q.InsertTenantRuntimeSpec(ctx, params); err != nil {
+			return fmt.Errorf("insert tenant runtime spec %s: %w", spec.TenantID, err)
+		}
+		if err := q.MarkTenantRuntimeSpec(ctx, platformdb.MarkTenantRuntimeSpecParams{SpecID: spec.SpecID.Bytes(), TenantID: spec.TenantID.Bytes()}); err != nil {
+			return fmt.Errorf("mark tenant runtime spec %s: %w", spec.TenantID, err)
+		}
+		return nil
+	}); err != nil {
+		return ids.UUID{}, err
+	}
+	return spec.SpecID, nil
+}
+
+func (s *Store) GetTenantRuntimeSpec(ctx context.Context, specID ids.UUID) (TenantRuntimeSpec, error) {
+	record, err := s.queries.GetTenantRuntimeSpec(ctx, platformdb.GetTenantRuntimeSpecParams{SpecID: specID.Bytes()})
+	if err != nil {
+		return TenantRuntimeSpec{}, fmt.Errorf("get tenant runtime spec %s: %w", specID, err)
+	}
+	return convertTenantRuntimeSpec(record)
+}
+
+func (s *Store) ListTenantRuntimeSpecsForTenant(ctx context.Context, tenantID ids.UUID) ([]TenantRuntimeSpec, error) {
+	records, err := s.queries.ListTenantRuntimeSpecsForTenant(ctx, platformdb.ListTenantRuntimeSpecsForTenantParams{TenantID: tenantID.Bytes()})
+	if err != nil {
+		return nil, fmt.Errorf("list tenant runtime specs %s: %w", tenantID, err)
+	}
+	return convertTenantRuntimeSpecs(records)
+}
+
+func (s *Store) RecordTenantRuntimeMeasurement(ctx context.Context, measurement TenantRuntimeMeasurement) (ids.UUID, error) {
+	measurement, params := prepareTenantRuntimeMeasurement(measurement)
+	if err := s.queries.InsertTenantRuntimeMeasurement(ctx, params); err != nil {
+		return ids.UUID{}, fmt.Errorf("insert tenant runtime measurement %s: %w", measurement.TenantID, err)
+	}
+	return measurement.MeasurementID, nil
+}
+
+func (s *Store) GetTenantRuntimeMeasurement(ctx context.Context, measurementID ids.UUID) (TenantRuntimeMeasurement, error) {
+	record, err := s.queries.GetTenantRuntimeMeasurement(ctx, platformdb.GetTenantRuntimeMeasurementParams{MeasurementID: measurementID.Bytes()})
+	if err != nil {
+		return TenantRuntimeMeasurement{}, fmt.Errorf("get tenant runtime measurement %s: %w", measurementID, err)
+	}
+	return convertTenantRuntimeMeasurement(record)
+}
+
+func (s *Store) ListTenantRuntimeMeasurementsForTenant(ctx context.Context, tenantID ids.UUID) ([]TenantRuntimeMeasurement, error) {
+	records, err := s.queries.ListTenantRuntimeMeasurementsForTenant(ctx, platformdb.ListTenantRuntimeMeasurementsForTenantParams{TenantID: tenantID.Bytes()})
+	if err != nil {
+		return nil, fmt.Errorf("list tenant runtime measurements %s: %w", tenantID, err)
+	}
+	return convertTenantRuntimeMeasurements(records)
+}
+
+func (s *Store) RecordTenantRuntimeAttestation(ctx context.Context, attestation TenantRuntimeAttestation) (ids.UUID, error) {
+	if err := s.withTx(ctx, func(q *platformdb.Queries) error {
+		prepared, params := prepareTenantRuntimeAttestation(attestation)
+		attestation = prepared
+		if err := q.InsertTenantRuntimeAttestation(ctx, params); err != nil {
+			return fmt.Errorf("insert tenant runtime attestation %s: %w", attestation.TenantID, err)
+		}
+		if err := q.MarkTenantAttestationSummary(ctx, platformdb.MarkTenantAttestationSummaryParams{
+			Verdict:       attestation.Verdict,
+			AttestedAt:    sqlNullTime(attestation.CreatedAt),
+			AttestationID: attestation.AttestationID.Bytes(),
+			SpecID:        nullableUUIDBytes(attestation.SpecID),
+			TenantID:      attestation.TenantID.Bytes(),
+		}); err != nil {
+			return fmt.Errorf("mark tenant attestation summary %s: %w", attestation.TenantID, err)
+		}
+		return nil
+	}); err != nil {
+		return ids.UUID{}, err
+	}
+	return attestation.AttestationID, nil
+}
+
+func (s *Store) RecordTenantRuntimeObservation(ctx context.Context, observation TenantRuntimeObservation) error {
+	return s.withTx(ctx, func(q *platformdb.Queries) error {
+		spec, specParams, err := s.prepareTenantRuntimeSpec(ctx, q, observation.Spec)
+		if err != nil {
+			return err
+		}
+		if observation.Measurement.TenantID.IsZero() {
+			observation.Measurement.TenantID = spec.TenantID
+		}
+		if observation.Attestation.TenantID.IsZero() {
+			observation.Attestation.TenantID = spec.TenantID
+		}
+		if err := q.InsertTenantRuntimeSpec(ctx, specParams); err != nil {
+			return fmt.Errorf("insert tenant runtime spec %s: %w", spec.TenantID, err)
+		}
+		measurement, measurementParams := prepareTenantRuntimeMeasurement(observation.Measurement)
+		if err := q.InsertTenantRuntimeMeasurement(ctx, measurementParams); err != nil {
+			return fmt.Errorf("insert tenant runtime measurement %s: %w", measurement.TenantID, err)
+		}
+		observation.Attestation.SpecID = spec.SpecID
+		observation.Attestation.MeasurementID = measurement.MeasurementID
+		attestation, attestationParams := prepareTenantRuntimeAttestation(observation.Attestation)
+		if err := q.InsertTenantRuntimeAttestation(ctx, attestationParams); err != nil {
+			return fmt.Errorf("insert tenant runtime attestation %s: %w", attestation.TenantID, err)
+		}
+		if err := q.MarkTenantAttestationSummary(ctx, platformdb.MarkTenantAttestationSummaryParams{
+			Verdict:       attestation.Verdict,
+			AttestedAt:    sqlNullTime(attestation.CreatedAt),
+			AttestationID: attestation.AttestationID.Bytes(),
+			SpecID:        nullableUUIDBytes(spec.SpecID),
+			TenantID:      spec.TenantID.Bytes(),
+		}); err != nil {
+			return fmt.Errorf("mark tenant attestation summary %s: %w", spec.TenantID, err)
+		}
+		return nil
+	})
+}
+
+func (s *Store) prepareTenantRuntimeSpec(ctx context.Context, q *platformdb.Queries, spec TenantRuntimeSpec) (TenantRuntimeSpec, platformdb.InsertTenantRuntimeSpecParams, error) {
+	if spec.SpecID.IsZero() {
+		spec.SpecID = ids.New()
+	}
+	record, err := q.GetTenantInstance(ctx, platformdb.GetTenantInstanceParams{TenantID: spec.TenantID.Bytes()})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return TenantRuntimeSpec{}, platformdb.InsertTenantRuntimeSpecParams{}, ErrTenantInstanceNotFound
+		}
+		return TenantRuntimeSpec{}, platformdb.InsertTenantRuntimeSpecParams{}, fmt.Errorf("get tenant instance %s: %w", spec.TenantID, err)
+	}
+	if spec.ServiceID != "" && spec.ServiceID != record.ServiceID || spec.SubjectSub != "" && spec.SubjectSub != record.SubjectSub {
+		return TenantRuntimeSpec{}, platformdb.InsertTenantRuntimeSpecParams{}, fmt.Errorf("tenant runtime spec identity mismatch")
+	}
+	spec.ServiceID = record.ServiceID
+	spec.SubjectSub = record.SubjectSub
+	if spec.CreatedAt.IsZero() {
+		spec.CreatedAt = time.Now().UTC()
+	}
+	return spec, platformdb.InsertTenantRuntimeSpecParams{
+		SpecID:              spec.SpecID.Bytes(),
+		TenantID:            spec.TenantID.Bytes(),
+		ServiceID:           spec.ServiceID,
+		SubjectSub:          spec.SubjectSub,
+		SpecVersion:         spec.SpecVersion,
+		ComposeHash:         spec.ComposeHash,
+		EnvContractHash:     spec.EnvContractHash,
+		SecretContractHash:  spec.SecretContractHash,
+		ImageRefsJson:       jsonRawOrDefault(spec.ImageRefsJSON, "[]"),
+		NetworkPolicyJson:   jsonRawOrDefault(spec.NetworkPolicyJSON, "{}"),
+		IdentityContextHash: spec.IdentityContextHash,
+		CreatedAt:           formatSQLiteTime(spec.CreatedAt),
+	}, nil
+}
+
+func prepareTenantRuntimeMeasurement(measurement TenantRuntimeMeasurement) (TenantRuntimeMeasurement, platformdb.InsertTenantRuntimeMeasurementParams) {
+	if measurement.MeasurementID.IsZero() {
+		measurement.MeasurementID = ids.New()
+	}
+	if measurement.MeasuredAt.IsZero() {
+		measurement.MeasuredAt = time.Now().UTC()
+	}
+	if measurement.HealthStatus == "" {
+		measurement.HealthStatus = "unknown"
+	}
+	return measurement, platformdb.InsertTenantRuntimeMeasurementParams{
+		MeasurementID:     measurement.MeasurementID.Bytes(),
+		TenantID:          measurement.TenantID.Bytes(),
+		CoolifyResourceID: sqlNullString(measurement.CoolifyResourceID),
+		ContainerID:       sqlNullString(measurement.ContainerID),
+		Source:            measurement.Source,
+		ImageRef:          sqlNullString(measurement.ImageRef),
+		ImageDigest:       sqlNullString(measurement.ImageDigest),
+		ComposeHash:       sqlNullString(measurement.ComposeHash),
+		EnvContractHash:   sqlNullString(measurement.EnvContractHash),
+		NetworkJson:       jsonRawOrDefault(measurement.NetworkJSON, "{}"),
+		PortsJson:         jsonRawOrDefault(measurement.PortsJSON, "{}"),
+		VolumesJson:       jsonRawOrDefault(measurement.VolumesJSON, "{}"),
+		HealthStatus:      measurement.HealthStatus,
+		RawSummaryJson:    jsonRawOrDefault(measurement.RawSummaryJSON, "{}"),
+		MeasuredAt:        formatSQLiteTime(measurement.MeasuredAt),
+	}
+}
+
+func prepareTenantRuntimeAttestation(attestation TenantRuntimeAttestation) (TenantRuntimeAttestation, platformdb.InsertTenantRuntimeAttestationParams) {
+	if attestation.AttestationID.IsZero() {
+		attestation.AttestationID = ids.New()
+	}
+	if attestation.CreatedAt.IsZero() {
+		attestation.CreatedAt = time.Now().UTC()
+	}
+	if attestation.Verdict == "" {
+		attestation.Verdict = "unknown"
+	}
+	return attestation, platformdb.InsertTenantRuntimeAttestationParams{
+		AttestationID:      attestation.AttestationID.Bytes(),
+		TenantID:           attestation.TenantID.Bytes(),
+		SpecID:             nullableUUIDBytes(attestation.SpecID),
+		MeasurementID:      nullableUUIDBytes(attestation.MeasurementID),
+		PolicyVersion:      attestation.PolicyVersion,
+		Verdict:            attestation.Verdict,
+		FailureReasonsJson: jsonRawOrDefault(attestation.FailureReasonsJSON, "[]"),
+		ExpiresAt:          sqlNullTimePtr(attestation.ExpiresAt),
+		CreatedAt:          formatSQLiteTime(attestation.CreatedAt),
+	}
+}
+
+func (s *Store) GetTenantRuntimeAttestation(ctx context.Context, attestationID ids.UUID) (TenantRuntimeAttestation, error) {
+	record, err := s.queries.GetTenantRuntimeAttestation(ctx, platformdb.GetTenantRuntimeAttestationParams{AttestationID: attestationID.Bytes()})
+	if err != nil {
+		return TenantRuntimeAttestation{}, fmt.Errorf("get tenant runtime attestation %s: %w", attestationID, err)
+	}
+	return convertTenantRuntimeAttestation(record)
+}
+
+func (s *Store) GetLatestTenantRuntimeAttestation(ctx context.Context, tenantID ids.UUID) (TenantRuntimeAttestation, error) {
+	record, err := s.queries.GetLatestTenantRuntimeAttestation(ctx, platformdb.GetLatestTenantRuntimeAttestationParams{TenantID: tenantID.Bytes()})
+	if err != nil {
+		return TenantRuntimeAttestation{}, fmt.Errorf("get latest tenant runtime attestation %s: %w", tenantID, err)
+	}
+	return convertTenantRuntimeAttestation(record)
 }
 
 func (s *Store) withTx(ctx context.Context, fn func(*platformdb.Queries) error) error {
@@ -782,7 +1279,7 @@ func convertEnabledServiceCatalogRecord(record platformdb.GetEnabledServiceCatal
 	return entry, nil
 }
 
-func convertTenantInstances(records []platformdb.TenantInstance) ([]TenantInstance, error) {
+func convertTenantInstances(records []platformdb.ListTenantInstancesRow) ([]TenantInstance, error) {
 	tenants := make([]TenantInstance, 0, len(records))
 	for _, record := range records {
 		tenantID, err := ids.ParseBytes(record.TenantID)
@@ -812,6 +1309,7 @@ func convertTenantInstances(records []platformdb.TenantInstance) ([]TenantInstan
 			SecretVersion:        record.SecretVersion.String,
 			LastError:            record.LastError.String,
 			Metadata:             json.RawMessage(record.Metadata),
+			AttestationState:     record.AttestationState,
 			CreatedAt:            createdAt,
 			UpdatedAt:            updatedAt,
 		}
@@ -825,9 +1323,265 @@ func convertTenantInstances(records []platformdb.TenantInstance) ([]TenantInstan
 		} else if ok {
 			tenant.LastReconciledAt = &value
 		}
+		if value, ok, err := parseSQLiteNullTime(record.LastAttestedAt); err != nil {
+			return nil, fmt.Errorf("parse tenant last_attested_at: %w", err)
+		} else if ok {
+			tenant.LastAttestedAt = &value
+		}
+		if len(record.LastAttestationID) > 0 {
+			lastAttestationID, err := ids.ParseBytes(record.LastAttestationID)
+			if err != nil {
+				return nil, fmt.Errorf("parse tenant last_attestation_id: %w", err)
+			}
+			tenant.LastAttestationID = lastAttestationID
+		}
+		if len(record.RuntimeSpecID) > 0 {
+			runtimeSpecID, err := ids.ParseBytes(record.RuntimeSpecID)
+			if err != nil {
+				return nil, fmt.Errorf("parse tenant runtime_spec_id: %w", err)
+			}
+			tenant.RuntimeSpecID = runtimeSpecID
+		}
 		tenants = append(tenants, tenant)
 	}
 	return tenants, nil
+}
+
+func convertMemoryBankProjects(records []platformdb.MemoryBankProject) ([]MemoryBankProject, error) {
+	projects := make([]MemoryBankProject, 0, len(records))
+	for _, record := range records {
+		project, err := convertMemoryBankProject(record)
+		if err != nil {
+			return nil, err
+		}
+		projects = append(projects, project)
+	}
+	return projects, nil
+}
+
+func convertMemoryBankProject(record platformdb.MemoryBankProject) (MemoryBankProject, error) {
+	projectID, err := ids.ParseBytes(record.ProjectID)
+	if err != nil {
+		return MemoryBankProject{}, fmt.Errorf("parse memory bank project id: %w", err)
+	}
+	ownerTenantID, err := ids.ParseBytes(record.OwnerTenantID)
+	if err != nil {
+		return MemoryBankProject{}, fmt.Errorf("parse memory bank owner tenant id: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(record.CreatedAt)
+	if err != nil {
+		return MemoryBankProject{}, fmt.Errorf("parse memory bank project created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(record.UpdatedAt)
+	if err != nil {
+		return MemoryBankProject{}, fmt.Errorf("parse memory bank project updated_at: %w", err)
+	}
+	project := MemoryBankProject{
+		ProjectID:       projectID,
+		OwnerSubjectSub: record.OwnerSubjectSub,
+		OwnerTenantID:   ownerTenantID,
+		ServiceID:       record.ServiceID,
+		ProjectKey:      record.ProjectKey,
+		DisplayName:     record.DisplayName,
+		RootPath:        record.RootPath,
+		Metadata:        json.RawMessage(record.Metadata),
+		CreatedAt:       createdAt,
+		UpdatedAt:       updatedAt,
+	}
+	if archivedAt, ok, err := parseSQLiteNullTime(record.ArchivedAt); err != nil {
+		return MemoryBankProject{}, fmt.Errorf("parse memory bank project archived_at: %w", err)
+	} else if ok {
+		project.ArchivedAt = &archivedAt
+	}
+	return project, nil
+}
+
+func convertMemoryBankProjectShares(records []platformdb.MemoryBankProjectShare) ([]MemoryBankProjectShare, error) {
+	shares := make([]MemoryBankProjectShare, 0, len(records))
+	for _, record := range records {
+		share, err := convertMemoryBankProjectShare(record)
+		if err != nil {
+			return nil, err
+		}
+		shares = append(shares, share)
+	}
+	return shares, nil
+}
+
+func convertMemoryBankProjectShare(record platformdb.MemoryBankProjectShare) (MemoryBankProjectShare, error) {
+	shareID, err := ids.ParseBytes(record.ShareID)
+	if err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("parse memory bank share id: %w", err)
+	}
+	projectID, err := ids.ParseBytes(record.ProjectID)
+	if err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("parse memory bank share project id: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(record.CreatedAt)
+	if err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("parse memory bank share created_at: %w", err)
+	}
+	updatedAt, err := parseSQLiteTime(record.UpdatedAt)
+	if err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("parse memory bank share updated_at: %w", err)
+	}
+	share := MemoryBankProjectShare{
+		ShareID:                shareID,
+		ProjectID:              projectID,
+		OwnerSubjectSub:        record.OwnerSubjectSub,
+		CollaboratorSubjectSub: record.CollaboratorSubjectSub,
+		Permission:             record.Permission,
+		State:                  record.State,
+		Source:                 record.Source,
+		CreatedBySubjectSub:    record.CreatedBySubjectSub,
+		Metadata:               json.RawMessage(record.Metadata),
+		CreatedAt:              createdAt,
+		UpdatedAt:              updatedAt,
+	}
+	if acceptedAt, ok, err := parseSQLiteNullTime(record.AcceptedAt); err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("parse memory bank share accepted_at: %w", err)
+	} else if ok {
+		share.AcceptedAt = &acceptedAt
+	}
+	if revokedAt, ok, err := parseSQLiteNullTime(record.RevokedAt); err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("parse memory bank share revoked_at: %w", err)
+	} else if ok {
+		share.RevokedAt = &revokedAt
+	}
+	if expiresAt, ok, err := parseSQLiteNullTime(record.ExpiresAt); err != nil {
+		return MemoryBankProjectShare{}, fmt.Errorf("parse memory bank share expires_at: %w", err)
+	} else if ok {
+		share.ExpiresAt = &expiresAt
+	}
+	return share, nil
+}
+
+func convertTenantRuntimeSpecs(records []platformdb.TenantRuntimeSpec) ([]TenantRuntimeSpec, error) {
+	specs := make([]TenantRuntimeSpec, 0, len(records))
+	for _, record := range records {
+		spec, err := convertTenantRuntimeSpec(record)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, spec)
+	}
+	return specs, nil
+}
+
+func convertTenantRuntimeSpec(record platformdb.TenantRuntimeSpec) (TenantRuntimeSpec, error) {
+	specID, err := ids.ParseBytes(record.SpecID)
+	if err != nil {
+		return TenantRuntimeSpec{}, fmt.Errorf("parse runtime spec id: %w", err)
+	}
+	tenantID, err := ids.ParseBytes(record.TenantID)
+	if err != nil {
+		return TenantRuntimeSpec{}, fmt.Errorf("parse runtime spec tenant id: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(record.CreatedAt)
+	if err != nil {
+		return TenantRuntimeSpec{}, fmt.Errorf("parse runtime spec created_at: %w", err)
+	}
+	return TenantRuntimeSpec{
+		SpecID:              specID,
+		TenantID:            tenantID,
+		ServiceID:           record.ServiceID,
+		SubjectSub:          record.SubjectSub,
+		SpecVersion:         record.SpecVersion,
+		ComposeHash:         record.ComposeHash,
+		EnvContractHash:     record.EnvContractHash,
+		SecretContractHash:  record.SecretContractHash,
+		ImageRefsJSON:       json.RawMessage(record.ImageRefsJson),
+		NetworkPolicyJSON:   json.RawMessage(record.NetworkPolicyJson),
+		IdentityContextHash: record.IdentityContextHash,
+		CreatedAt:           createdAt,
+	}, nil
+}
+
+func convertTenantRuntimeMeasurements(records []platformdb.TenantRuntimeMeasurement) ([]TenantRuntimeMeasurement, error) {
+	measurements := make([]TenantRuntimeMeasurement, 0, len(records))
+	for _, record := range records {
+		measurement, err := convertTenantRuntimeMeasurement(record)
+		if err != nil {
+			return nil, err
+		}
+		measurements = append(measurements, measurement)
+	}
+	return measurements, nil
+}
+
+func convertTenantRuntimeMeasurement(record platformdb.TenantRuntimeMeasurement) (TenantRuntimeMeasurement, error) {
+	measurementID, err := ids.ParseBytes(record.MeasurementID)
+	if err != nil {
+		return TenantRuntimeMeasurement{}, fmt.Errorf("parse runtime measurement id: %w", err)
+	}
+	tenantID, err := ids.ParseBytes(record.TenantID)
+	if err != nil {
+		return TenantRuntimeMeasurement{}, fmt.Errorf("parse runtime measurement tenant id: %w", err)
+	}
+	measuredAt, err := parseSQLiteTime(record.MeasuredAt)
+	if err != nil {
+		return TenantRuntimeMeasurement{}, fmt.Errorf("parse runtime measurement measured_at: %w", err)
+	}
+	return TenantRuntimeMeasurement{
+		MeasurementID:     measurementID,
+		TenantID:          tenantID,
+		CoolifyResourceID: record.CoolifyResourceID.String,
+		ContainerID:       record.ContainerID.String,
+		Source:            record.Source,
+		ImageRef:          record.ImageRef.String,
+		ImageDigest:       record.ImageDigest.String,
+		ComposeHash:       record.ComposeHash.String,
+		EnvContractHash:   record.EnvContractHash.String,
+		NetworkJSON:       json.RawMessage(record.NetworkJson),
+		PortsJSON:         json.RawMessage(record.PortsJson),
+		VolumesJSON:       json.RawMessage(record.VolumesJson),
+		HealthStatus:      record.HealthStatus,
+		RawSummaryJSON:    json.RawMessage(record.RawSummaryJson),
+		MeasuredAt:        measuredAt,
+	}, nil
+}
+
+func convertTenantRuntimeAttestation(record platformdb.TenantRuntimeAttestation) (TenantRuntimeAttestation, error) {
+	attestationID, err := ids.ParseBytes(record.AttestationID)
+	if err != nil {
+		return TenantRuntimeAttestation{}, fmt.Errorf("parse runtime attestation id: %w", err)
+	}
+	tenantID, err := ids.ParseBytes(record.TenantID)
+	if err != nil {
+		return TenantRuntimeAttestation{}, fmt.Errorf("parse runtime attestation tenant id: %w", err)
+	}
+	createdAt, err := parseSQLiteTime(record.CreatedAt)
+	if err != nil {
+		return TenantRuntimeAttestation{}, fmt.Errorf("parse runtime attestation created_at: %w", err)
+	}
+	attestation := TenantRuntimeAttestation{
+		AttestationID:      attestationID,
+		TenantID:           tenantID,
+		PolicyVersion:      record.PolicyVersion,
+		Verdict:            record.Verdict,
+		FailureReasonsJSON: json.RawMessage(record.FailureReasonsJson),
+		CreatedAt:          createdAt,
+	}
+	if len(record.SpecID) > 0 {
+		specID, err := ids.ParseBytes(record.SpecID)
+		if err != nil {
+			return TenantRuntimeAttestation{}, fmt.Errorf("parse runtime attestation spec id: %w", err)
+		}
+		attestation.SpecID = specID
+	}
+	if len(record.MeasurementID) > 0 {
+		measurementID, err := ids.ParseBytes(record.MeasurementID)
+		if err != nil {
+			return TenantRuntimeAttestation{}, fmt.Errorf("parse runtime attestation measurement id: %w", err)
+		}
+		attestation.MeasurementID = measurementID
+	}
+	if expiresAt, ok, err := parseSQLiteNullTime(record.ExpiresAt); err != nil {
+		return TenantRuntimeAttestation{}, fmt.Errorf("parse runtime attestation expires_at: %w", err)
+	} else if ok {
+		attestation.ExpiresAt = &expiresAt
+	}
+	return attestation, nil
 }
 
 func tenantMapKey(subjectSub string, serviceID string) string { return subjectSub + "::" + serviceID }
@@ -850,6 +1604,27 @@ func sqlNullTime(value time.Time) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: formatSQLiteTime(value), Valid: true}
+}
+
+func sqlNullTimePtr(value *time.Time) sql.NullString {
+	if value == nil || value.IsZero() {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: formatSQLiteTime(*value), Valid: true}
+}
+
+func nullableUUIDBytes(value ids.UUID) []byte {
+	if value.IsZero() {
+		return nil
+	}
+	return value.Bytes()
+}
+
+func jsonRawOrDefault(value json.RawMessage, defaultValue string) string {
+	if strings.TrimSpace(string(value)) == "" {
+		return defaultValue
+	}
+	return string(value)
 }
 
 func formatSQLiteTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }

@@ -10,6 +10,24 @@ import (
 	"strings"
 )
 
+const DisableAllBuiltinServiceCatalogEntries = `-- name: DisableAllBuiltinServiceCatalogEntries :exec
+UPDATE service_catalog
+SET enabled = 0,
+    updated_at = CURRENT_TIMESTAMP
+WHERE source = 'builtin'
+`
+
+// DisableAllBuiltinServiceCatalogEntries
+//
+//	UPDATE service_catalog
+//	SET enabled = 0,
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE source = 'builtin'
+func (q *Queries) DisableAllBuiltinServiceCatalogEntries(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, DisableAllBuiltinServiceCatalogEntries)
+	return err
+}
+
 const DisableServiceCatalogEntriesNotIn = `-- name: DisableServiceCatalogEntriesNotIn :exec
 UPDATE service_catalog
 SET enabled = 0,

@@ -158,6 +158,12 @@ SET enabled = 0,
 WHERE service_id NOT IN (sqlc.slice(service_ids))
   AND source = 'builtin';
 
+-- name: DisableAllBuiltinServiceCatalogEntries :exec
+UPDATE service_catalog
+SET enabled = 0,
+    updated_at = CURRENT_TIMESTAMP
+WHERE source = 'builtin';
+
 -- name: DisableServiceCatalogEntry :exec
 UPDATE service_catalog
 SET enabled = 0,

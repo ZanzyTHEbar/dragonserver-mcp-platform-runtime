@@ -21,7 +21,7 @@ func TestCoolifyClientServiceLifecycleMethods(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/services":
 			var requestBody CoolifyCreateServiceRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&requestBody))
-			require.Equal(t, "mcp-mealie-u-123", requestBody.Name)
+			require.Equal(t, "mcp-example-a-u-123", requestBody.Name)
 			writeTestJSON(t, w, map[string]any{
 				"uuid":    "service-123",
 				"domains": []string{},
@@ -65,7 +65,7 @@ func TestCoolifyClientServiceLifecycleMethods(t *testing.T) {
 
 	createResponse, err := client.CreateService(context.Background(), CoolifyCreateServiceRequest{
 		Type:        "docker-compose",
-		Name:        "mcp-mealie-u-123",
+		Name:        "mcp-example-a-u-123",
 		ProjectUUID: "project-123",
 	})
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestCoolifyClientIncludesResponseBodyInHTTPStatusErrors(t *testing.T) {
 
 	_, err = client.CreateService(context.Background(), CoolifyCreateServiceRequest{
 		Type:        "docker-compose",
-		Name:        "mcp-mealie-u-123",
+		Name:        "mcp-example-a-u-123",
 		ProjectUUID: "project-123",
 	})
 	require.Error(t, err)

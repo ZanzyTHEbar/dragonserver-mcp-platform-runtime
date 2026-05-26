@@ -8,6 +8,37 @@ import (
 	"database/sql"
 )
 
+type MemoryBankProject struct {
+	ProjectID       []byte         `db:"project_id" json:"project_id"`
+	OwnerSubjectSub string         `db:"owner_subject_sub" json:"owner_subject_sub"`
+	OwnerTenantID   []byte         `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ServiceID       string         `db:"service_id" json:"service_id"`
+	ProjectKey      string         `db:"project_key" json:"project_key"`
+	DisplayName     string         `db:"display_name" json:"display_name"`
+	RootPath        string         `db:"root_path" json:"root_path"`
+	Metadata        string         `db:"metadata" json:"metadata"`
+	ArchivedAt      sql.NullString `db:"archived_at" json:"archived_at"`
+	CreatedAt       string         `db:"created_at" json:"created_at"`
+	UpdatedAt       string         `db:"updated_at" json:"updated_at"`
+}
+
+type MemoryBankProjectShare struct {
+	ShareID                []byte         `db:"share_id" json:"share_id"`
+	ProjectID              []byte         `db:"project_id" json:"project_id"`
+	OwnerSubjectSub        string         `db:"owner_subject_sub" json:"owner_subject_sub"`
+	CollaboratorSubjectSub string         `db:"collaborator_subject_sub" json:"collaborator_subject_sub"`
+	Permission             string         `db:"permission" json:"permission"`
+	State                  string         `db:"state" json:"state"`
+	Source                 string         `db:"source" json:"source"`
+	CreatedBySubjectSub    string         `db:"created_by_subject_sub" json:"created_by_subject_sub"`
+	AcceptedAt             sql.NullString `db:"accepted_at" json:"accepted_at"`
+	RevokedAt              sql.NullString `db:"revoked_at" json:"revoked_at"`
+	ExpiresAt              sql.NullString `db:"expires_at" json:"expires_at"`
+	Metadata               string         `db:"metadata" json:"metadata"`
+	CreatedAt              string         `db:"created_at" json:"created_at"`
+	UpdatedAt              string         `db:"updated_at" json:"updated_at"`
+}
+
 type OauthDeviceAuthorization struct {
 	DeviceAuthorizationID []byte         `db:"device_authorization_id" json:"device_authorization_id"`
 	ClientID              string         `db:"client_id" json:"client_id"`
@@ -30,23 +61,47 @@ type OauthDeviceAuthorization struct {
 	UpdatedAt             string         `db:"updated_at" json:"updated_at"`
 }
 
-type TenantInstance struct {
-	TenantID             []byte         `db:"tenant_id" json:"tenant_id"`
-	SubjectSub           string         `db:"subject_sub" json:"subject_sub"`
-	ServiceID            string         `db:"service_id" json:"service_id"`
-	SubjectKey           string         `db:"subject_key" json:"subject_key"`
-	TenantInstanceName   string         `db:"tenant_instance_name" json:"tenant_instance_name"`
-	InternalDnsName      string         `db:"internal_dns_name" json:"internal_dns_name"`
-	DesiredState         string         `db:"desired_state" json:"desired_state"`
-	RuntimeState         string         `db:"runtime_state" json:"runtime_state"`
-	CoolifyResourceID    sql.NullString `db:"coolify_resource_id" json:"coolify_resource_id"`
-	CoolifyApplicationID sql.NullString `db:"coolify_application_id" json:"coolify_application_id"`
-	UpstreamUrl          sql.NullString `db:"upstream_url" json:"upstream_url"`
-	SecretVersion        sql.NullString `db:"secret_version" json:"secret_version"`
-	LastHealthyAt        sql.NullString `db:"last_healthy_at" json:"last_healthy_at"`
-	LastReconciledAt     sql.NullString `db:"last_reconciled_at" json:"last_reconciled_at"`
-	LastError            sql.NullString `db:"last_error" json:"last_error"`
-	Metadata             string         `db:"metadata" json:"metadata"`
-	CreatedAt            string         `db:"created_at" json:"created_at"`
-	UpdatedAt            string         `db:"updated_at" json:"updated_at"`
+type TenantRuntimeAttestation struct {
+	AttestationID      []byte         `db:"attestation_id" json:"attestation_id"`
+	TenantID           []byte         `db:"tenant_id" json:"tenant_id"`
+	SpecID             []byte         `db:"spec_id" json:"spec_id"`
+	MeasurementID      []byte         `db:"measurement_id" json:"measurement_id"`
+	PolicyVersion      string         `db:"policy_version" json:"policy_version"`
+	Verdict            string         `db:"verdict" json:"verdict"`
+	FailureReasonsJson string         `db:"failure_reasons_json" json:"failure_reasons_json"`
+	ExpiresAt          sql.NullString `db:"expires_at" json:"expires_at"`
+	CreatedAt          string         `db:"created_at" json:"created_at"`
+}
+
+type TenantRuntimeMeasurement struct {
+	MeasurementID     []byte         `db:"measurement_id" json:"measurement_id"`
+	TenantID          []byte         `db:"tenant_id" json:"tenant_id"`
+	CoolifyResourceID sql.NullString `db:"coolify_resource_id" json:"coolify_resource_id"`
+	ContainerID       sql.NullString `db:"container_id" json:"container_id"`
+	Source            string         `db:"source" json:"source"`
+	ImageRef          sql.NullString `db:"image_ref" json:"image_ref"`
+	ImageDigest       sql.NullString `db:"image_digest" json:"image_digest"`
+	ComposeHash       sql.NullString `db:"compose_hash" json:"compose_hash"`
+	EnvContractHash   sql.NullString `db:"env_contract_hash" json:"env_contract_hash"`
+	NetworkJson       string         `db:"network_json" json:"network_json"`
+	PortsJson         string         `db:"ports_json" json:"ports_json"`
+	VolumesJson       string         `db:"volumes_json" json:"volumes_json"`
+	HealthStatus      string         `db:"health_status" json:"health_status"`
+	RawSummaryJson    string         `db:"raw_summary_json" json:"raw_summary_json"`
+	MeasuredAt        string         `db:"measured_at" json:"measured_at"`
+}
+
+type TenantRuntimeSpec struct {
+	SpecID              []byte `db:"spec_id" json:"spec_id"`
+	TenantID            []byte `db:"tenant_id" json:"tenant_id"`
+	ServiceID           string `db:"service_id" json:"service_id"`
+	SubjectSub          string `db:"subject_sub" json:"subject_sub"`
+	SpecVersion         string `db:"spec_version" json:"spec_version"`
+	ComposeHash         string `db:"compose_hash" json:"compose_hash"`
+	EnvContractHash     string `db:"env_contract_hash" json:"env_contract_hash"`
+	SecretContractHash  string `db:"secret_contract_hash" json:"secret_contract_hash"`
+	ImageRefsJson       string `db:"image_refs_json" json:"image_refs_json"`
+	NetworkPolicyJson   string `db:"network_policy_json" json:"network_policy_json"`
+	IdentityContextHash string `db:"identity_context_hash" json:"identity_context_hash"`
+	CreatedAt           string `db:"created_at" json:"created_at"`
 }

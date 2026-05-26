@@ -31,6 +31,23 @@ type Querier interface {
 	//      OR control_plane_leases.expires_at <= excluded.updated_at
 	//  RETURNING holder_id
 	AcquireControlPlaneLease(ctx context.Context, arg AcquireControlPlaneLeaseParams) (string, error)
+	//ActivateMemoryBankProjectShare
+	//
+	//  UPDATE memory_bank_project_shares
+	//  SET state = 'active',
+	//      accepted_at = ?1,
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE share_id = ?2
+	//    AND collaborator_subject_sub = ?3
+	//    AND state IN ('pending', 'active')
+	//    AND (expires_at IS NULL OR julianday(expires_at) > julianday(?1))
+	//    AND EXISTS (
+	//      SELECT 1
+	//      FROM memory_bank_projects
+	//      WHERE memory_bank_projects.project_id = memory_bank_project_shares.project_id
+	//        AND memory_bank_projects.archived_at IS NULL
+	//    )
+	ActivateMemoryBankProjectShare(ctx context.Context, arg ActivateMemoryBankProjectShareParams) (int64, error)
 	//AllowedServiceGrant
 	//
 	//  SELECT EXISTS (
@@ -69,14 +86,14 @@ type Querier interface {
 	//  UPDATE oauth_sessions
 	//  SET consumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 	//  WHERE authorization_code_hash = ?1 AND consumed_at IS NULL
-	//  RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+	//  RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 	ConsumeOAuthSessionByCodeHash(ctx context.Context, arg ConsumeOAuthSessionByCodeHashParams) (ConsumeOAuthSessionByCodeHashRow, error)
 	//ConsumeOAuthSessionByRefreshHash
 	//
 	//  UPDATE oauth_sessions
 	//  SET consumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 	//  WHERE refresh_token_hash = ?1 AND consumed_at IS NULL
-	//  RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+	//  RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 	ConsumeOAuthSessionByRefreshHash(ctx context.Context, arg ConsumeOAuthSessionByRefreshHashParams) (ConsumeOAuthSessionByRefreshHashRow, error)
 	//CountAllowedServiceGrants
 	//
@@ -212,6 +229,13 @@ type Querier interface {
 	//    AND status = 'pending'
 	//    AND expires_at > ?3
 	DenyDeviceAuthorization(ctx context.Context, arg DenyDeviceAuthorizationParams) (int64, error)
+	//DisableAllBuiltinServiceCatalogEntries
+	//
+	//  UPDATE service_catalog
+	//  SET enabled = 0,
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE source = 'builtin'
+	DisableAllBuiltinServiceCatalogEntries(ctx context.Context) error
 	//DisableServiceCatalogEntriesNotIn
 	//
 	//  UPDATE service_catalog
@@ -253,6 +277,15 @@ type Querier interface {
 	//      updated_at = CURRENT_TIMESTAMP
 	//  WHERE tenant_id = ?7
 	EnableTenantInstance(ctx context.Context, arg EnableTenantInstanceParams) error
+	//ExpireMemoryBankProjectShares
+	//
+	//  UPDATE memory_bank_project_shares
+	//  SET state = 'expired',
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE state IN ('pending', 'active')
+	//    AND expires_at IS NOT NULL
+	//    AND julianday(expires_at) <= julianday(?1)
+	ExpireMemoryBankProjectShares(ctx context.Context, arg ExpireMemoryBankProjectSharesParams) (int64, error)
 	//GetBrowserSession
 	//
 	//  SELECT claims, expires_at
@@ -331,6 +364,75 @@ type Querier interface {
 	//  WHERE service_id = ?1
 	//    AND enabled = 1
 	GetEnabledServiceCatalogEntry(ctx context.Context, arg GetEnabledServiceCatalogEntryParams) (GetEnabledServiceCatalogEntryRow, error)
+	//GetLatestTenantRuntimeAttestation
+	//
+	//  SELECT attestation_id,
+	//         tenant_id,
+	//         spec_id,
+	//         measurement_id,
+	//         policy_version,
+	//         verdict,
+	//         failure_reasons_json,
+	//         expires_at,
+	//         created_at
+	//  FROM tenant_runtime_attestations
+	//  WHERE tenant_id = ?1
+	//  ORDER BY created_at DESC, rowid DESC
+	//  LIMIT 1
+	GetLatestTenantRuntimeAttestation(ctx context.Context, arg GetLatestTenantRuntimeAttestationParams) (TenantRuntimeAttestation, error)
+	//GetMemoryBankProject
+	//
+	//  SELECT project_id,
+	//         owner_subject_sub,
+	//         owner_tenant_id,
+	//         service_id,
+	//         project_key,
+	//         display_name,
+	//         root_path,
+	//         metadata,
+	//         archived_at,
+	//         created_at,
+	//         updated_at
+	//  FROM memory_bank_projects
+	//  WHERE project_id = ?1
+	GetMemoryBankProject(ctx context.Context, arg GetMemoryBankProjectParams) (MemoryBankProject, error)
+	//GetMemoryBankProjectByOwnerKey
+	//
+	//  SELECT project_id,
+	//         owner_subject_sub,
+	//         owner_tenant_id,
+	//         service_id,
+	//         project_key,
+	//         display_name,
+	//         root_path,
+	//         metadata,
+	//         archived_at,
+	//         created_at,
+	//         updated_at
+	//  FROM memory_bank_projects
+	//  WHERE owner_subject_sub = ?1
+	//    AND service_id = ?2
+	//    AND project_key = ?3
+	GetMemoryBankProjectByOwnerKey(ctx context.Context, arg GetMemoryBankProjectByOwnerKeyParams) (MemoryBankProject, error)
+	//GetMemoryBankProjectShare
+	//
+	//  SELECT share_id,
+	//         memory_bank_project_shares.project_id,
+	//         memory_bank_project_shares.owner_subject_sub,
+	//         memory_bank_project_shares.collaborator_subject_sub,
+	//         memory_bank_project_shares.permission,
+	//         memory_bank_project_shares.state,
+	//         memory_bank_project_shares.source,
+	//         memory_bank_project_shares.created_by_subject_sub,
+	//         memory_bank_project_shares.accepted_at,
+	//         memory_bank_project_shares.revoked_at,
+	//         memory_bank_project_shares.expires_at,
+	//         memory_bank_project_shares.metadata,
+	//         memory_bank_project_shares.created_at,
+	//         memory_bank_project_shares.updated_at
+	//  FROM memory_bank_project_shares
+	//  WHERE share_id = ?1
+	GetMemoryBankProjectShare(ctx context.Context, arg GetMemoryBankProjectShareParams) (MemoryBankProjectShare, error)
 	//GetOAuthClient
 	//
 	//  SELECT redirect_uris, grant_types, scopes, created_by_subject_sub, token_endpoint_auth_method, client_secret_hash, disabled_at
@@ -339,19 +441,19 @@ type Querier interface {
 	GetOAuthClient(ctx context.Context, arg GetOAuthClientParams) (GetOAuthClientRow, error)
 	//GetOAuthSessionByAccessHash
 	//
-	//  SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+	//  SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 	//  FROM oauth_sessions
 	//  WHERE access_token_hash = ?1
 	GetOAuthSessionByAccessHash(ctx context.Context, arg GetOAuthSessionByAccessHashParams) (GetOAuthSessionByAccessHashRow, error)
 	//GetOAuthSessionByCodeHash
 	//
-	//  SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+	//  SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 	//  FROM oauth_sessions
 	//  WHERE authorization_code_hash = ?1 AND consumed_at IS NULL
 	GetOAuthSessionByCodeHash(ctx context.Context, arg GetOAuthSessionByCodeHashParams) (GetOAuthSessionByCodeHashRow, error)
 	//GetOAuthSessionByRefreshHash
 	//
-	//  SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+	//  SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 	//  FROM oauth_sessions
 	//  WHERE refresh_token_hash = ?1
 	GetOAuthSessionByRefreshHash(ctx context.Context, arg GetOAuthSessionByRefreshHashParams) (GetOAuthSessionByRefreshHashRow, error)
@@ -396,6 +498,113 @@ type Querier interface {
 	//  FROM subjects
 	//  WHERE subject_sub = ?1
 	GetSubject(ctx context.Context, arg GetSubjectParams) (GetSubjectRow, error)
+	//GetTenantInstance
+	//
+	//  SELECT tenant_id,
+	//         subject_sub,
+	//         service_id,
+	//         subject_key,
+	//         tenant_instance_name,
+	//         internal_dns_name,
+	//         desired_state,
+	//         runtime_state,
+	//         coolify_resource_id,
+	//         coolify_application_id,
+	//         upstream_url,
+	//         secret_version,
+	//         last_healthy_at,
+	//         last_reconciled_at,
+	//         last_error,
+	//         metadata,
+	//         attestation_state,
+	//         last_attested_at,
+	//         last_attestation_id,
+	//         runtime_spec_id,
+	//         created_at,
+	//         updated_at
+	//  FROM tenant_instances
+	//  WHERE tenant_id = ?1
+	GetTenantInstance(ctx context.Context, arg GetTenantInstanceParams) (GetTenantInstanceRow, error)
+	//GetTenantInstanceBySubjectService
+	//
+	//  SELECT tenant_id,
+	//         subject_sub,
+	//         service_id,
+	//         subject_key,
+	//         tenant_instance_name,
+	//         internal_dns_name,
+	//         desired_state,
+	//         runtime_state,
+	//         coolify_resource_id,
+	//         coolify_application_id,
+	//         upstream_url,
+	//         secret_version,
+	//         last_healthy_at,
+	//         last_reconciled_at,
+	//         last_error,
+	//         metadata,
+	//         attestation_state,
+	//         last_attested_at,
+	//         last_attestation_id,
+	//         runtime_spec_id,
+	//         created_at,
+	//         updated_at
+	//  FROM tenant_instances
+	//  WHERE subject_sub = ?1
+	//    AND service_id = ?2
+	//    AND desired_state <> 'deleted'
+	GetTenantInstanceBySubjectService(ctx context.Context, arg GetTenantInstanceBySubjectServiceParams) (GetTenantInstanceBySubjectServiceRow, error)
+	//GetTenantRuntimeAttestation
+	//
+	//  SELECT attestation_id,
+	//         tenant_id,
+	//         spec_id,
+	//         measurement_id,
+	//         policy_version,
+	//         verdict,
+	//         failure_reasons_json,
+	//         expires_at,
+	//         created_at
+	//  FROM tenant_runtime_attestations
+	//  WHERE attestation_id = ?1
+	GetTenantRuntimeAttestation(ctx context.Context, arg GetTenantRuntimeAttestationParams) (TenantRuntimeAttestation, error)
+	//GetTenantRuntimeMeasurement
+	//
+	//  SELECT measurement_id,
+	//         tenant_id,
+	//         coolify_resource_id,
+	//         container_id,
+	//         source,
+	//         image_ref,
+	//         image_digest,
+	//         compose_hash,
+	//         env_contract_hash,
+	//         network_json,
+	//         ports_json,
+	//         volumes_json,
+	//         health_status,
+	//         raw_summary_json,
+	//         measured_at
+	//  FROM tenant_runtime_measurements
+	//  WHERE measurement_id = ?1
+	GetTenantRuntimeMeasurement(ctx context.Context, arg GetTenantRuntimeMeasurementParams) (TenantRuntimeMeasurement, error)
+	//GetTenantRuntimeSpec
+	//
+	//  SELECT spec_id,
+	//         tenant_id,
+	//         service_id,
+	//         subject_sub,
+	//         spec_version,
+	//         compose_hash,
+	//         env_contract_hash,
+	//         secret_contract_hash,
+	//         image_refs_json,
+	//         network_policy_json,
+	//         identity_context_hash,
+	//         created_at
+	//  FROM tenant_runtime_specs
+	//  WHERE spec_id = ?1
+	GetTenantRuntimeSpec(ctx context.Context, arg GetTenantRuntimeSpecParams) (TenantRuntimeSpec, error)
 	//GetTenantUpstream
 	//
 	//  SELECT COALESCE(upstream_url, '') AS upstream_url,
@@ -423,6 +632,24 @@ type Querier interface {
 	//  FROM service_grant_sources
 	//  GROUP BY subject_sub, service_id
 	InsertEffectiveServiceGrantsFromSources(ctx context.Context) error
+	//InsertMemoryBankProjectShare
+	//
+	//  INSERT INTO memory_bank_project_shares (share_id, project_id, owner_subject_sub, collaborator_subject_sub, permission, state, source, created_by_subject_sub, expires_at, metadata)
+	//  SELECT ?1,
+	//         ?2,
+	//         ?3,
+	//         ?4,
+	//         ?5,
+	//         ?6,
+	//         ?7,
+	//         ?8,
+	//         ?9,
+	//         ?10
+	//  FROM memory_bank_projects
+	//  WHERE project_id = ?2
+	//    AND owner_subject_sub = ?3
+	//    AND archived_at IS NULL
+	InsertMemoryBankProjectShare(ctx context.Context, arg InsertMemoryBankProjectShareParams) (int64, error)
 	//InsertReconcileRun
 	//
 	//  INSERT INTO reconcile_runs (run_id, tenant_id, desired_state, observed_state, action, status, details, started_at, finished_at)
@@ -441,6 +668,21 @@ type Querier interface {
 	//  INSERT INTO tenant_instances (tenant_id, subject_sub, service_id, subject_key, tenant_instance_name, internal_dns_name, desired_state, runtime_state)
 	//  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 	InsertTenantInstance(ctx context.Context, arg InsertTenantInstanceParams) error
+	//InsertTenantRuntimeAttestation
+	//
+	//  INSERT INTO tenant_runtime_attestations (attestation_id, tenant_id, spec_id, measurement_id, policy_version, verdict, failure_reasons_json, expires_at, created_at)
+	//  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+	InsertTenantRuntimeAttestation(ctx context.Context, arg InsertTenantRuntimeAttestationParams) error
+	//InsertTenantRuntimeMeasurement
+	//
+	//  INSERT INTO tenant_runtime_measurements (measurement_id, tenant_id, coolify_resource_id, container_id, source, image_ref, image_digest, compose_hash, env_contract_hash, network_json, ports_json, volumes_json, health_status, raw_summary_json, measured_at)
+	//  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+	InsertTenantRuntimeMeasurement(ctx context.Context, arg InsertTenantRuntimeMeasurementParams) error
+	//InsertTenantRuntimeSpec
+	//
+	//  INSERT INTO tenant_runtime_specs (spec_id, tenant_id, service_id, subject_sub, spec_version, compose_hash, env_contract_hash, secret_contract_hash, image_refs_json, network_policy_json, identity_context_hash, created_at)
+	//  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+	InsertTenantRuntimeSpec(ctx context.Context, arg InsertTenantRuntimeSpecParams) error
 	//ListDesiredTenantSpecs
 	//
 	//  SELECT subjects.subject_sub,
@@ -455,6 +697,7 @@ type Querier interface {
 	//  JOIN subjects ON subjects.subject_sub = service_grants.subject_sub
 	//  JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
 	//  WHERE service_catalog.enabled = 1
+	//    AND service_catalog.source = 'builtin'
 	//  ORDER BY service_grants.service_id, subjects.subject_sub
 	ListDesiredTenantSpecs(ctx context.Context) ([]ListDesiredTenantSpecsRow, error)
 	//ListEnabledServiceCatalog
@@ -488,6 +731,70 @@ type Querier interface {
 	//  WHERE enabled = 1
 	//  ORDER BY service_id
 	ListEnabledServiceIDs(ctx context.Context) ([]string, error)
+	//ListMemoryBankProjectSharesForSubject
+	//
+	//  SELECT memory_bank_project_shares.share_id,
+	//         memory_bank_project_shares.project_id,
+	//         memory_bank_project_shares.owner_subject_sub,
+	//         memory_bank_project_shares.collaborator_subject_sub,
+	//         memory_bank_project_shares.permission,
+	//         memory_bank_project_shares.state,
+	//         memory_bank_project_shares.source,
+	//         memory_bank_project_shares.created_by_subject_sub,
+	//         memory_bank_project_shares.accepted_at,
+	//         memory_bank_project_shares.revoked_at,
+	//         memory_bank_project_shares.expires_at,
+	//         memory_bank_project_shares.metadata,
+	//         memory_bank_project_shares.created_at,
+	//         memory_bank_project_shares.updated_at
+	//  FROM memory_bank_project_shares
+	//  JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+	//  WHERE memory_bank_project_shares.collaborator_subject_sub = ?1
+	//    AND (?2 OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(?3)) AND memory_bank_projects.archived_at IS NULL))
+	//  ORDER BY memory_bank_project_shares.updated_at DESC
+	ListMemoryBankProjectSharesForSubject(ctx context.Context, arg ListMemoryBankProjectSharesForSubjectParams) ([]MemoryBankProjectShare, error)
+	//ListMemoryBankProjectSharesForSubjectService
+	//
+	//  SELECT memory_bank_project_shares.share_id,
+	//         memory_bank_project_shares.project_id,
+	//         memory_bank_project_shares.owner_subject_sub,
+	//         memory_bank_project_shares.collaborator_subject_sub,
+	//         memory_bank_project_shares.permission,
+	//         memory_bank_project_shares.state,
+	//         memory_bank_project_shares.source,
+	//         memory_bank_project_shares.created_by_subject_sub,
+	//         memory_bank_project_shares.accepted_at,
+	//         memory_bank_project_shares.revoked_at,
+	//         memory_bank_project_shares.expires_at,
+	//         memory_bank_project_shares.metadata,
+	//         memory_bank_project_shares.created_at,
+	//         memory_bank_project_shares.updated_at
+	//  FROM memory_bank_project_shares
+	//  JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+	//  WHERE memory_bank_project_shares.collaborator_subject_sub = ?1
+	//    AND memory_bank_projects.service_id = ?2
+	//    AND (?3 OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(?4)) AND memory_bank_projects.archived_at IS NULL))
+	//  ORDER BY memory_bank_project_shares.updated_at DESC
+	ListMemoryBankProjectSharesForSubjectService(ctx context.Context, arg ListMemoryBankProjectSharesForSubjectServiceParams) ([]MemoryBankProjectShare, error)
+	//ListMemoryBankProjectsByOwner
+	//
+	//  SELECT project_id,
+	//         owner_subject_sub,
+	//         owner_tenant_id,
+	//         service_id,
+	//         project_key,
+	//         display_name,
+	//         root_path,
+	//         metadata,
+	//         archived_at,
+	//         created_at,
+	//         updated_at
+	//  FROM memory_bank_projects
+	//  WHERE owner_subject_sub = ?1
+	//    AND service_id = ?2
+	//    AND (?3 OR archived_at IS NULL)
+	//  ORDER BY project_key
+	ListMemoryBankProjectsByOwner(ctx context.Context, arg ListMemoryBankProjectsByOwnerParams) ([]MemoryBankProject, error)
 	//ListServiceCatalog
 	//
 	//  SELECT service_id,
@@ -542,11 +849,54 @@ type Querier interface {
 	//         last_reconciled_at,
 	//         last_error,
 	//         metadata,
+	//         attestation_state,
+	//         last_attested_at,
+	//         last_attestation_id,
+	//         runtime_spec_id,
 	//         created_at,
 	//         updated_at
 	//  FROM tenant_instances
 	//  ORDER BY service_id, subject_sub
-	ListTenantInstances(ctx context.Context) ([]TenantInstance, error)
+	ListTenantInstances(ctx context.Context) ([]ListTenantInstancesRow, error)
+	//ListTenantRuntimeMeasurementsForTenant
+	//
+	//  SELECT measurement_id,
+	//         tenant_id,
+	//         coolify_resource_id,
+	//         container_id,
+	//         source,
+	//         image_ref,
+	//         image_digest,
+	//         compose_hash,
+	//         env_contract_hash,
+	//         network_json,
+	//         ports_json,
+	//         volumes_json,
+	//         health_status,
+	//         raw_summary_json,
+	//         measured_at
+	//  FROM tenant_runtime_measurements
+	//  WHERE tenant_id = ?1
+	//  ORDER BY measured_at DESC
+	ListTenantRuntimeMeasurementsForTenant(ctx context.Context, arg ListTenantRuntimeMeasurementsForTenantParams) ([]TenantRuntimeMeasurement, error)
+	//ListTenantRuntimeSpecsForTenant
+	//
+	//  SELECT spec_id,
+	//         tenant_id,
+	//         service_id,
+	//         subject_sub,
+	//         spec_version,
+	//         compose_hash,
+	//         env_contract_hash,
+	//         secret_contract_hash,
+	//         image_refs_json,
+	//         network_policy_json,
+	//         identity_context_hash,
+	//         created_at
+	//  FROM tenant_runtime_specs
+	//  WHERE tenant_id = ?1
+	//  ORDER BY created_at DESC
+	ListTenantRuntimeSpecsForTenant(ctx context.Context, arg ListTenantRuntimeSpecsForTenantParams) ([]TenantRuntimeSpec, error)
 	//MarkExpiredDeviceAuthorizations
 	//
 	//  UPDATE oauth_device_authorizations
@@ -555,6 +905,16 @@ type Querier interface {
 	//  WHERE status IN ('pending', 'approved')
 	//    AND expires_at <= ?1
 	MarkExpiredDeviceAuthorizations(ctx context.Context, arg MarkExpiredDeviceAuthorizationsParams) (int64, error)
+	//MarkTenantAttestationSummary
+	//
+	//  UPDATE tenant_instances
+	//  SET attestation_state = ?1,
+	//      last_attested_at = ?2,
+	//      last_attestation_id = ?3,
+	//      runtime_spec_id = CASE WHEN ?4 IS NULL THEN runtime_spec_id ELSE ?4 END,
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE tenant_id = ?5
+	MarkTenantAttestationSummary(ctx context.Context, arg MarkTenantAttestationSummaryParams) error
 	//MarkTenantDesiredDeleted
 	//
 	//  UPDATE tenant_instances
@@ -562,6 +922,32 @@ type Querier interface {
 	//      updated_at = CURRENT_TIMESTAMP
 	//  WHERE tenant_id = ?2
 	MarkTenantDesiredDeleted(ctx context.Context, arg MarkTenantDesiredDeletedParams) error
+	//MarkTenantDesiredDisabledBySubjectService
+	//
+	//  UPDATE tenant_instances
+	//  SET desired_state = 'disabled',
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE tenant_instances.subject_sub = ?1
+	//    AND tenant_instances.service_id = ?2
+	//    AND tenant_instances.desired_state <> 'deleted'
+	MarkTenantDesiredDisabledBySubjectService(ctx context.Context, arg MarkTenantDesiredDisabledBySubjectServiceParams) (int64, error)
+	//MarkTenantDesiredEnabledBySubjectServiceWithGrant
+	//
+	//  UPDATE tenant_instances
+	//  SET desired_state = 'enabled',
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE tenant_instances.subject_sub = ?1
+	//    AND tenant_instances.service_id = ?2
+	//    AND tenant_instances.desired_state <> 'deleted'
+	//    AND EXISTS (
+	//      SELECT 1
+	//      FROM service_grants
+	//      JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
+	//      WHERE service_grants.subject_sub = tenant_instances.subject_sub
+	//        AND service_grants.service_id = tenant_instances.service_id
+	//        AND service_catalog.enabled = 1
+	//    )
+	MarkTenantDesiredEnabledBySubjectServiceWithGrant(ctx context.Context, arg MarkTenantDesiredEnabledBySubjectServiceWithGrantParams) (int64, error)
 	//MarkTenantReconciled
 	//
 	//  UPDATE tenant_instances
@@ -570,6 +956,13 @@ type Querier interface {
 	//      updated_at = CURRENT_TIMESTAMP
 	//  WHERE tenant_id = ?3
 	MarkTenantReconciled(ctx context.Context, arg MarkTenantReconciledParams) error
+	//MarkTenantRuntimeSpec
+	//
+	//  UPDATE tenant_instances
+	//  SET runtime_spec_id = ?1,
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE tenant_id = ?2
+	MarkTenantRuntimeSpec(ctx context.Context, arg MarkTenantRuntimeSpecParams) error
 	//PruneExpiredDeviceAuthorizations
 	//
 	//  DELETE FROM oauth_device_authorizations
@@ -598,6 +991,15 @@ type Querier interface {
 	//  WHERE lease_name = ?1
 	//      AND holder_id = ?2
 	ReleaseControlPlaneLease(ctx context.Context, arg ReleaseControlPlaneLeaseParams) error
+	//RevokeMemoryBankProjectShare
+	//
+	//  UPDATE memory_bank_project_shares
+	//  SET state = 'revoked',
+	//      revoked_at = ?1,
+	//      updated_at = CURRENT_TIMESTAMP
+	//  WHERE share_id = ?2
+	//    AND state <> 'revoked'
+	RevokeMemoryBankProjectShare(ctx context.Context, arg RevokeMemoryBankProjectShareParams) (int64, error)
 	//SlowDownDeviceAuthorizationPoll
 	//
 	//  UPDATE oauth_device_authorizations
@@ -635,10 +1037,23 @@ type Querier interface {
 	//      last_synced_at = CURRENT_TIMESTAMP,
 	//      updated_at = CURRENT_TIMESTAMP
 	UpsertManualServiceGrantSource(ctx context.Context, arg UpsertManualServiceGrantSourceParams) error
+	//UpsertMemoryBankProject
+	//
+	//  INSERT INTO memory_bank_projects (project_id, owner_subject_sub, owner_tenant_id, service_id, project_key, display_name, root_path, metadata, archived_at)
+	//  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+	//  ON CONFLICT(owner_subject_sub, service_id, project_key) DO UPDATE SET
+	//      owner_tenant_id = excluded.owner_tenant_id,
+	//      display_name = excluded.display_name,
+	//      root_path = excluded.root_path,
+	//      metadata = excluded.metadata,
+	//      archived_at = COALESCE(excluded.archived_at, memory_bank_projects.archived_at),
+	//      updated_at = CURRENT_TIMESTAMP
+	//  RETURNING project_id
+	UpsertMemoryBankProject(ctx context.Context, arg UpsertMemoryBankProjectParams) ([]byte, error)
 	//UpsertOAuthSession
 	//
-	//  INSERT INTO oauth_sessions (session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, consumed_at, updated_at)
-	//  VALUES (?1, NULLIF(?2, ''), ?3, NULLIF(?4, ''), ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''), ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, NULL, CURRENT_TIMESTAMP)
+	//  INSERT INTO oauth_sessions (session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id, consumed_at, updated_at)
+	//  VALUES (?1, NULLIF(?2, ''), ?3, NULLIF(?4, ''), ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''), ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, NULLIF(?27, X''), NULL, CURRENT_TIMESTAMP)
 	//  ON CONFLICT(session_id) DO UPDATE SET
 	//      subject_sub = excluded.subject_sub,
 	//      client_id = excluded.client_id,
@@ -663,6 +1078,9 @@ type Querier interface {
 	//      expires_at = excluded.expires_at,
 	//      issued_via = excluded.issued_via,
 	//      operator_reason = excluded.operator_reason,
+	//      authorization_details = excluded.authorization_details,
+	//      policy_binding_id = excluded.policy_binding_id,
+	//      share_id = excluded.share_id,
 	//      consumed_at = NULL,
 	//      updated_at = CURRENT_TIMESTAMP
 	UpsertOAuthSession(ctx context.Context, arg UpsertOAuthSessionParams) error

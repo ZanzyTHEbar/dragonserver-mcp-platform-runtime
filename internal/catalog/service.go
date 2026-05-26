@@ -31,6 +31,41 @@ type IdentityContextConfig struct {
 	Mode IdentityContextMode `json:"mode"`
 }
 
+type CapabilityType string
+
+const (
+	CapabilityTypeService  CapabilityType = "service"
+	CapabilityTypeTool     CapabilityType = "tool"
+	CapabilityTypePrompt   CapabilityType = "prompt"
+	CapabilityTypeResource CapabilityType = "resource"
+)
+
+type CapabilityRisk string
+
+const (
+	CapabilityRiskRead      CapabilityRisk = "read"
+	CapabilityRiskWrite     CapabilityRisk = "write"
+	CapabilityRiskAdmin     CapabilityRisk = "admin"
+	CapabilityRiskSensitive CapabilityRisk = "sensitive"
+)
+
+type DefaultCapabilityPolicy string
+
+const (
+	DefaultCapabilityAllowWithServiceGrant DefaultCapabilityPolicy = "allow_with_service_grant"
+	DefaultCapabilityRequireExplicitGrant  DefaultCapabilityPolicy = "require_explicit_grant"
+	DefaultCapabilityDeny                  DefaultCapabilityPolicy = "deny"
+)
+
+type ServiceCapability struct {
+	Type          CapabilityType          `json:"type"`
+	Name          string                  `json:"name"`
+	Scope         string                  `json:"scope"`
+	Risk          CapabilityRisk          `json:"risk"`
+	DefaultPolicy DefaultCapabilityPolicy `json:"default_policy"`
+	Metadata      map[string]any          `json:"metadata,omitempty"`
+}
+
 func (c IdentityContextConfig) Normalized() IdentityContextConfig {
 	if c.Mode == "" {
 		c.Mode = IdentityContextModeNone
@@ -57,63 +92,9 @@ type ServiceCatalogEntry struct {
 	AdapterRequirement     AdapterRequirement
 	SecretContract         []SecretDefinition
 	IdentityContext        IdentityContextConfig
+	Capabilities           []ServiceCapability
 }
 
 func DefaultCatalogV1() []ServiceCatalogEntry {
-	return []ServiceCatalogEntry{
-		{
-			ServiceID:              "mealie",
-			DisplayName:            "Mealie",
-			UpstreamServiceName:    "mealie-mcp",
-			TransportType:          TransportTypeStreamableHTTP,
-			InternalPort:           3031,
-			PublicPath:             "/mealie/mcp",
-			InternalUpstreamPath:   "/mcp",
-			HealthPath:             "/mcp",
-			HealthProbeExpectation: "GET returns discovery JSON with transport=streamable-http",
-			ResourceProfile:        "small",
-			PersistencePolicy:      "stateless",
-			AdapterRequirement:     AdapterRequirementNone,
-			SecretContract: []SecretDefinition{
-				{Key: "api-token", Required: true},
-			},
-		},
-		{
-			ServiceID:              "actualbudget",
-			DisplayName:            "Actual Budget",
-			UpstreamServiceName:    "actualbudget-mcp",
-			TransportType:          TransportTypeStreamableHTTP,
-			InternalPort:           3000,
-			PublicPath:             "/actualbudget/mcp",
-			InternalUpstreamPath:   "/http",
-			HealthPath:             "/http",
-			HealthProbeExpectation: "GET reaches a live MCP endpoint and returns a JSON-RPC no-session error rather than connection failure",
-			ResourceProfile:        "small",
-			PersistencePolicy:      "stateless",
-			AdapterRequirement:     AdapterRequirementPathTranslation,
-			SecretContract: []SecretDefinition{
-				{Key: "actual-api-key", Required: true},
-				{Key: "budget-sync-id", Required: true},
-				{Key: "actual-budget-encryption-password", Required: false},
-			},
-		},
-		{
-			ServiceID:              "memory",
-			DisplayName:            "Memory",
-			UpstreamServiceName:    "memory",
-			TransportType:          TransportTypeStreamableHTTP,
-			InternalPort:           8090,
-			PublicPath:             "/memory/mcp",
-			InternalUpstreamPath:   "/sse",
-			HealthPath:             "/sse",
-			HealthProbeExpectation: "edge bridges streamable HTTP requests to the upstream SSE MCP endpoint",
-			ResourceProfile:        "medium",
-			PersistencePolicy:      "stateful-libsql",
-			AdapterRequirement:     AdapterRequirementSSEToStreamableHTTP,
-			SecretContract: []SecretDefinition{
-				{Key: "libsql-url", Required: true},
-				{Key: "libsql-auth-token", Required: true},
-			},
-		},
-	}
+	return nil
 }

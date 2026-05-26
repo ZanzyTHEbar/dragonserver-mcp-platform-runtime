@@ -16,17 +16,17 @@ func TestServiceDirectoryCanonicalizesServiceMetadata(t *testing.T) {
 	require.NoError(t, cache.Refresh(context.Background()))
 	directory := NewServiceDirectory("https://mcp.example.com/", cache)
 
-	resolution, ok := directory.ResolveByID("mealie")
+	resolution, ok := directory.ResolveByID("example-a")
 	require.True(t, ok)
-	require.Equal(t, "mealie", resolution.ServiceID)
-	require.Equal(t, "mcp:mealie", resolution.Scope)
-	require.Equal(t, "https://mcp.example.com/mealie/mcp", resolution.Resource)
+	require.Equal(t, "example-a", resolution.ServiceID)
+	require.Equal(t, "mcp:example-a", resolution.Scope)
+	require.Equal(t, "https://mcp.example.com/example-a/mcp", resolution.Resource)
 	require.Equal(t, resolution.Resource, resolution.PublicURL)
-	require.Equal(t, "https://mcp.example.com/.well-known/oauth-protected-resource/mealie", resolution.ProtectedResourceMetadataURL)
-	require.Equal(t, "https://mcp.example.com/mealie", resolution.AuthorizationServerIssuer)
-	require.Equal(t, "https://mcp.example.com/oauth/authorize/mealie", resolution.AuthorizationEndpoint)
-	require.Equal(t, "https://mcp.example.com/oauth/device_authorization/mealie", resolution.DeviceAuthorizationEndpoint)
-	require.Equal(t, "https://mcp.example.com/oauth/register/mealie", resolution.RegistrationEndpoint)
+	require.Equal(t, "https://mcp.example.com/.well-known/oauth-protected-resource/example-a", resolution.ProtectedResourceMetadataURL)
+	require.Equal(t, "https://mcp.example.com/example-a", resolution.AuthorizationServerIssuer)
+	require.Equal(t, "https://mcp.example.com/oauth/authorize/example-a", resolution.AuthorizationEndpoint)
+	require.Equal(t, "https://mcp.example.com/oauth/device_authorization/example-a", resolution.DeviceAuthorizationEndpoint)
+	require.Equal(t, "https://mcp.example.com/oauth/register/example-a", resolution.RegistrationEndpoint)
 }
 
 func TestServiceDirectoryResolvesByPathScopeResourceAndWellKnownRef(t *testing.T) {
@@ -37,24 +37,24 @@ func TestServiceDirectoryResolvesByPathScopeResourceAndWellKnownRef(t *testing.T
 	require.NoError(t, cache.Refresh(context.Background()))
 	directory := NewServiceDirectory("https://mcp.example.com", cache)
 
-	pathResolution, ok := directory.ResolveByPublicPath("/actualbudget/mcp/tools/list")
+	pathResolution, ok := directory.ResolveByPublicPath("/example-b/mcp/tools/list")
 	require.True(t, ok)
-	require.Equal(t, "actualbudget", pathResolution.ServiceID)
+	require.Equal(t, "example-b", pathResolution.ServiceID)
 
-	scopeResolution, err := directory.ResolveScope("mcp:actualbudget")
+	scopeResolution, err := directory.ResolveScope("mcp:example-b")
 	require.NoError(t, err)
 	require.Equal(t, pathResolution, scopeResolution)
 
-	resourceResolution, err := directory.ResolveResource("https://mcp.example.com/actualbudget/mcp/")
+	resourceResolution, err := directory.ResolveResource("https://mcp.example.com/example-b/mcp/")
 	require.NoError(t, err)
 	require.Equal(t, pathResolution, resourceResolution)
 
-	wellKnownByID, scoped, err := directory.ResolveWellKnownRef("/.well-known/oauth-protected-resource/actualbudget", "/.well-known/oauth-protected-resource")
+	wellKnownByID, scoped, err := directory.ResolveWellKnownRef("/.well-known/oauth-protected-resource/example-b", "/.well-known/oauth-protected-resource")
 	require.NoError(t, err)
 	require.True(t, scoped)
 	require.Equal(t, pathResolution, wellKnownByID)
 
-	wellKnownByPath, scoped, err := directory.ResolveWellKnownRef("/.well-known/oauth-protected-resource/actualbudget/mcp", "/.well-known/oauth-protected-resource")
+	wellKnownByPath, scoped, err := directory.ResolveWellKnownRef("/.well-known/oauth-protected-resource/example-b/mcp", "/.well-known/oauth-protected-resource")
 	require.NoError(t, err)
 	require.True(t, scoped)
 	require.Equal(t, pathResolution, wellKnownByPath)

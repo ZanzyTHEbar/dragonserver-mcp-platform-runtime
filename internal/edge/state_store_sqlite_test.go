@@ -11,6 +11,7 @@ import (
 	"dragonserver/mcp-platform/internal/controlplane"
 	"dragonserver/mcp-platform/internal/domain"
 	"dragonserver/mcp-platform/internal/ids"
+	platformsqlite "dragonserver/mcp-platform/internal/platform/sqlite"
 	"dragonserver/mcp-platform/internal/platform/sqlite/platformdb"
 
 	"github.com/go-oauth2/oauth2/v4/models"
@@ -27,6 +28,8 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, cpStore.RunMigrations(ctx))
 	require.NoError(t, cpStore.SeedServiceCatalog(ctx))
+	registerSQLiteEdgeTestService(t, ctx, cpStore, databaseURL, "example-a", false)
+	registerSQLiteEdgeTestService(t, ctx, cpStore, databaseURL, "example-b", false)
 
 	secretPath := filepath.Join(t.TempDir(), "session-key")
 	require.NoError(t, os.WriteFile(secretPath, []byte("test-session-encryption-key"), 0o600))
@@ -41,7 +44,7 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.NotEmpty(t, entries)
 
 	now := time.Now().UTC().Round(0)
-	claims := IdentityClaims{Sub: "sqlite-fixture-user", Email: "fixture@example.com", Name: "Fixture User", PreferredUsername: "fixture-user", AccountBindingID: "stable-user-id", AccountBindingClaim: "dragonserver_user_id", Groups: []string{"mcp-users", "mcp-service-mealie"}}
+	claims := IdentityClaims{Sub: "sqlite-fixture-user", Email: "fixture@example.com", Name: "Fixture User", PreferredUsername: "fixture-user", AccountBindingID: "stable-user-id", AccountBindingClaim: "dragonserver_user_id", Groups: []string{"mcp-users", "mcp-service-example-a"}}
 	require.NoError(t, storeValue.UpsertSubject(ctx, claims))
 	gotClaims, ok, err := storeValue.GetSubjectIdentity(ctx, claims.Sub)
 	require.NoError(t, err)
@@ -53,12 +56,12 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.Equal(t, claims.PreferredUsername, gotClaims.PreferredUsername)
 	require.Equal(t, claims.AccountBindingID, gotClaims.AccountBindingID)
 	require.Equal(t, claims.AccountBindingClaim, gotClaims.AccountBindingClaim)
-	require.NoError(t, cpStore.ReplaceSubjectGrants(ctx, claims.Sub, []controlplane.ServiceGrant{{SubjectSub: claims.Sub, ServiceID: "mealie", SourceGroup: "mcp-service-mealie", GrantedAt: now, LastSyncedAt: now}}))
+	require.NoError(t, cpStore.ReplaceSubjectGrants(ctx, claims.Sub, []controlplane.ServiceGrant{{SubjectSub: claims.Sub, ServiceID: "example-a", SourceGroup: "mcp-service-example-a", GrantedAt: now, LastSyncedAt: now}}))
 
-	allowed, err := storeValue.Allowed(ctx, claims.Sub, "mealie")
+	allowed, err := storeValue.Allowed(ctx, claims.Sub, "example-a")
 	require.NoError(t, err)
 	require.True(t, allowed)
-	allowed, err = storeValue.AllowedScopes(ctx, claims.Sub, "mcp:mealie")
+	allowed, err = storeValue.AllowedScopes(ctx, claims.Sub, "mcp:example-a")
 	require.NoError(t, err)
 	require.True(t, allowed)
 
@@ -77,7 +80,7 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, session, gotSession)
 
-	client := registeredClient{ID: "client-1", Name: "Example Client", RedirectURIs: []string{"https://example.com/callback"}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: tokenEndpointAuthMethodClientBasic, Secret: "super-secret", Scopes: []string{"mcp:mealie"}}
+	client := registeredClient{ID: "client-1", Name: "Example Client", RedirectURIs: []string{"https://example.com/callback"}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: tokenEndpointAuthMethodClientBasic, Secret: "super-secret", Scopes: []string{"mcp:example-a"}}
 	require.NoError(t, storeValue.CreateClient(ctx, client, claims.Sub))
 	clientInfo, err := storeValue.GetByID(ctx, client.ID)
 	require.NoError(t, err)
@@ -86,8 +89,8 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, confidential.VerifyPassword(client.Secret))
 	require.False(t, confidential.VerifyPassword("wrong-secret"))
-	require.True(t, clientAllowsScope(clientInfo, "mcp:mealie"))
-	require.False(t, clientAllowsScope(clientInfo, "mcp:actualbudget"))
+	require.True(t, clientAllowsScope(clientInfo, "mcp:example-a"))
+	require.False(t, clientAllowsScope(clientInfo, "mcp:example-b"))
 	require.True(t, clientAllowsGrant(clientInfo, "authorization_code"))
 	require.False(t, clientAllowsGrant(clientInfo, "urn:ietf:params:oauth:grant-type:device_code"))
 
@@ -96,9 +99,9 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.NoError(t, storeValue.CreateDeviceAuthorization(ctx, deviceAuthorization{
 		ID:              deviceID,
 		ClientID:        client.ID,
-		ServiceID:       "mealie",
-		Resource:        "https://mcp.example.com/mealie/mcp",
-		Scope:           "mcp:mealie",
+		ServiceID:       "example-a",
+		Resource:        "https://mcp.example.com/example-a/mcp",
+		Scope:           "mcp:example-a",
 		DeviceCodeHash:  hashOpaqueValue("sqlite-device-code"),
 		UserCodeHash:    hashOpaqueValue(normalizeUserCode("WXYZ-1234")),
 		UserCodeDisplay: "WXYZ-1234",
@@ -146,9 +149,9 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.NoError(t, storeValue.CreateDeviceAuthorization(ctx, deviceAuthorization{
 		ID:              atomicDeviceID,
 		ClientID:        client.ID,
-		ServiceID:       "mealie",
-		Resource:        "https://mcp.example.com/mealie/mcp",
-		Scope:           "mcp:mealie",
+		ServiceID:       "example-a",
+		Resource:        "https://mcp.example.com/example-a/mcp",
+		Scope:           "mcp:example-a",
 		DeviceCodeHash:  hashOpaqueValue("sqlite-atomic-device-code"),
 		UserCodeHash:    hashOpaqueValue(normalizeUserCode("ATOM-1234")),
 		UserCodeDisplay: "ATOM-1234",
@@ -162,21 +165,21 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	duplicateToken := models.NewToken()
 	duplicateToken.SetClientID(client.ID)
 	duplicateToken.SetUserID(claims.Sub)
-	duplicateToken.SetScope("mcp:mealie")
+	duplicateToken.SetScope("mcp:example-a")
 	duplicateToken.SetAccess("duplicate-device-access")
 	duplicateToken.SetAccessCreateAt(now)
 	duplicateToken.SetAccessExpiresIn(time.Hour)
-	setTokenInfoResource(duplicateToken, "https://mcp.example.com/mealie/mcp")
+	setTokenInfoResource(duplicateToken, "https://mcp.example.com/example-a/mcp")
 	require.NoError(t, storeValue.Create(ctx, duplicateToken))
 
 	deviceToken := models.NewToken()
 	deviceToken.SetClientID(client.ID)
 	deviceToken.SetUserID(claims.Sub)
-	deviceToken.SetScope("mcp:mealie")
+	deviceToken.SetScope("mcp:example-a")
 	deviceToken.SetAccess("duplicate-device-access")
 	deviceToken.SetAccessCreateAt(now)
 	deviceToken.SetAccessExpiresIn(time.Hour)
-	setTokenInfoResource(deviceToken, "https://mcp.example.com/mealie/mcp")
+	setTokenInfoResource(deviceToken, "https://mcp.example.com/example-a/mcp")
 	setTokenInfoIssuedVia(deviceToken, oauthGrantDeviceCode)
 	updated, err = storeValue.ConsumeDeviceAuthorizationAndCreateToken(ctx, atomicDeviceID, now.Add(5*time.Second), deviceToken)
 	require.Error(t, err)
@@ -202,9 +205,9 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	require.NoError(t, storeValue.CreateDeviceAuthorization(ctx, deviceAuthorization{
 		ID:              expiredID,
 		ClientID:        client.ID,
-		ServiceID:       "mealie",
-		Resource:        "https://mcp.example.com/mealie/mcp",
-		Scope:           "mcp:mealie",
+		ServiceID:       "example-a",
+		Resource:        "https://mcp.example.com/example-a/mcp",
+		Scope:           "mcp:example-a",
 		DeviceCodeHash:  hashOpaqueValue("sqlite-expired-device-code"),
 		UserCodeHash:    hashOpaqueValue(normalizeUserCode("EEEE-0000")),
 		UserCodeDisplay: "EEEE-0000",
@@ -225,51 +228,86 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	token := models.NewToken()
 	token.SetClientID(client.ID)
 	token.SetUserID(claims.Sub)
-	token.SetScope("mcp:mealie")
+	token.SetScope("mcp:example-a")
 	token.SetAccess("access-token")
 	token.SetAccessCreateAt(now)
 	token.SetAccessExpiresIn(time.Hour)
 	token.SetRefresh("refresh-token")
 	token.SetRefreshCreateAt(now)
 	token.SetRefreshExpiresIn(2 * time.Hour)
-	setTokenInfoResource(token, "https://mcp.example.com/mealie/mcp")
+	setTokenInfoResource(token, "https://mcp.example.com/example-a/mcp")
+	policyBindingID := "policy-binding-1"
+	shareID := ids.New()
+	setTokenInfoAuthorizationMetadata(token, `[]`, &policyBindingID, &shareID)
 	require.NoError(t, storeValue.Create(ctx, token))
 
 	accessToken, err := storeValue.GetByAccess(ctx, "access-token")
 	require.NoError(t, err)
 	require.Equal(t, "access-token", accessToken.GetAccess())
-	require.Equal(t, "https://mcp.example.com/mealie/mcp", tokenInfoResource(accessToken))
-	wrongResourceCtx := context.WithValue(ctx, expectedResourceContextKey{}, "https://mcp.example.com/actualbudget/mcp")
+	require.Equal(t, "https://mcp.example.com/example-a/mcp", tokenInfoResource(accessToken))
+	require.Equal(t, `[]`, tokenInfoAuthorizationDetails(accessToken))
+	require.Equal(t, policyBindingID, tokenInfoPolicyBindingID(accessToken))
+	loadedShareID, err := tokenInfoShareID(accessToken)
+	require.NoError(t, err)
+	require.NotNil(t, loadedShareID)
+	require.Equal(t, shareID, *loadedShareID)
+	wrongResourceCtx := context.WithValue(ctx, expectedResourceContextKey{}, "https://mcp.example.com/example-b/mcp")
 	_, err = storeValue.GetByRefresh(wrongResourceCtx, "refresh-token")
 	require.ErrorContains(t, err, "token was not issued for this MCP resource")
-	rightResourceCtx := context.WithValue(ctx, expectedResourceContextKey{}, "https://mcp.example.com/mealie/mcp")
+	rightResourceCtx := context.WithValue(ctx, expectedResourceContextKey{}, "https://mcp.example.com/example-a/mcp")
 	refreshToken, err := storeValue.GetByRefresh(rightResourceCtx, "refresh-token")
 	require.NoError(t, err)
 	require.Equal(t, "access-token", refreshToken.GetAccess())
 	require.Equal(t, "refresh-token", refreshToken.GetRefresh())
-	require.Equal(t, "https://mcp.example.com/mealie/mcp", tokenInfoResource(refreshToken))
+	require.Equal(t, "https://mcp.example.com/example-a/mcp", tokenInfoResource(refreshToken))
+	require.Equal(t, `[]`, tokenInfoAuthorizationDetails(refreshToken))
+	require.Equal(t, policyBindingID, tokenInfoPolicyBindingID(refreshToken))
 
 	codeToken := models.NewToken()
 	codeToken.SetClientID(client.ID)
 	codeToken.SetUserID(claims.Sub)
 	codeToken.SetRedirectURI(client.RedirectURIs[0])
-	codeToken.SetScope("mcp:mealie")
+	codeToken.SetScope("mcp:example-a")
 	codeToken.SetCode("auth-code")
 	codeToken.SetCodeCreateAt(now)
 	codeToken.SetCodeExpiresIn(time.Minute)
-	setTokenInfoResource(codeToken, "https://mcp.example.com/mealie/mcp")
+	setTokenInfoResource(codeToken, "https://mcp.example.com/example-a/mcp")
+	setTokenInfoAuthorizationMetadata(codeToken, `[]`, nil, nil)
 	require.NoError(t, storeValue.Create(ctx, codeToken))
 	_, err = storeValue.GetByCode(wrongResourceCtx, "auth-code")
 	require.ErrorContains(t, err, "token was not issued for this MCP resource")
 	loadedCode, err := storeValue.GetByCode(rightResourceCtx, "auth-code")
 	require.NoError(t, err)
 	require.Equal(t, "auth-code", loadedCode.GetCode())
-	require.Equal(t, "https://mcp.example.com/mealie/mcp", tokenInfoResource(loadedCode))
+	require.Equal(t, "https://mcp.example.com/example-a/mcp", tokenInfoResource(loadedCode))
+	require.Equal(t, `[]`, tokenInfoAuthorizationDetails(loadedCode))
+
+	invalidMetadataToken := models.NewToken()
+	invalidMetadataToken.SetClientID(client.ID)
+	invalidMetadataToken.SetUserID(claims.Sub)
+	invalidMetadataToken.SetScope("mcp:example-a")
+	invalidMetadataToken.SetAccess("invalid-metadata-access-token")
+	invalidMetadataToken.SetAccessCreateAt(now)
+	invalidMetadataToken.SetAccessExpiresIn(time.Hour)
+	setTokenInfoResource(invalidMetadataToken, "https://mcp.example.com/example-a/mcp")
+	setTokenInfoAuthorizationMetadata(invalidMetadataToken, `{"type":"not-an-array"}`, nil, nil)
+	require.ErrorContains(t, storeValue.Create(ctx, invalidMetadataToken), "authorization_details must be valid JSON array")
+
+	unsupportedMetadataToken := models.NewToken()
+	unsupportedMetadataToken.SetClientID(client.ID)
+	unsupportedMetadataToken.SetUserID(claims.Sub)
+	unsupportedMetadataToken.SetScope("mcp:example-a")
+	unsupportedMetadataToken.SetAccess("unsupported-metadata-access-token")
+	unsupportedMetadataToken.SetAccessCreateAt(now)
+	unsupportedMetadataToken.SetAccessExpiresIn(time.Hour)
+	setTokenInfoResource(unsupportedMetadataToken, "https://mcp.example.com/example-a/mcp")
+	setTokenInfoAuthorizationMetadata(unsupportedMetadataToken, `[{"type":"example_project","project_key":"ops-notes"}]`, nil, nil)
+	require.ErrorContains(t, storeValue.Create(ctx, unsupportedMetadataToken), "authorization_details contains unsupported entries")
 
 	deniedToken := models.NewToken()
 	deniedToken.SetClientID(client.ID)
 	deniedToken.SetUserID(claims.Sub)
-	deniedToken.SetScope("mcp:actualbudget")
+	deniedToken.SetScope("mcp:example-b")
 	deniedToken.SetAccess("denied-access-token")
 	deniedToken.SetAccessCreateAt(now)
 	deniedToken.SetAccessExpiresIn(time.Hour)
@@ -280,12 +318,12 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	_, err = storeValue.GetByRefresh(ctx, "denied-refresh-token")
 	require.ErrorContains(t, err, "oauth client is not registered for requested scope")
 
-	otherClient := registeredClient{ID: "client-other", Name: "Other", RedirectURIs: []string{"https://example.com/other"}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: tokenEndpointAuthMethodNone, Scopes: []string{"mcp:mealie"}}
+	otherClient := registeredClient{ID: "client-other", Name: "Other", RedirectURIs: []string{"https://example.com/other"}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: tokenEndpointAuthMethodNone, Scopes: []string{"mcp:example-a"}}
 	require.NoError(t, storeValue.CreateClient(ctx, otherClient, claims.Sub))
 	crossClientToken := models.NewToken()
 	crossClientToken.SetClientID(client.ID)
 	crossClientToken.SetUserID(claims.Sub)
-	crossClientToken.SetScope("mcp:mealie")
+	crossClientToken.SetScope("mcp:example-a")
 	crossClientToken.SetAccess("cross-client-access-token")
 	crossClientToken.SetAccessCreateAt(now)
 	crossClientToken.SetAccessExpiresIn(time.Hour)
@@ -297,12 +335,12 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 	_, err = storeValue.GetByRefresh(wrongClientCtx, "cross-client-refresh-token")
 	require.ErrorContains(t, err, "refresh token was not issued to this OAuth client")
 
-	revokedClient := registeredClient{ID: "client-2", Name: "Example Client 2", RedirectURIs: []string{"https://example.com/other-callback"}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: tokenEndpointAuthMethodNone, Scopes: []string{"mcp:mealie"}}
+	revokedClient := registeredClient{ID: "client-2", Name: "Example Client 2", RedirectURIs: []string{"https://example.com/other-callback"}, GrantTypes: []string{"authorization_code", "refresh_token"}, ResponseTypes: []string{"code"}, TokenEndpointAuthMethod: tokenEndpointAuthMethodNone, Scopes: []string{"mcp:example-a"}}
 	require.NoError(t, storeValue.CreateClient(ctx, revokedClient, claims.Sub))
 	revokedToken := models.NewToken()
 	revokedToken.SetClientID(revokedClient.ID)
 	revokedToken.SetUserID(claims.Sub)
-	revokedToken.SetScope("mcp:mealie")
+	revokedToken.SetScope("mcp:example-a")
 	revokedToken.SetAccess("revoked-access-token")
 	revokedToken.SetAccessCreateAt(now)
 	revokedToken.SetAccessExpiresIn(time.Hour)
@@ -316,12 +354,12 @@ func TestSQLiteEdgeStateStoreRoundTrip(t *testing.T) {
 
 	_, err = storeValue.db.ExecContext(ctx, `
 INSERT INTO oauth_sessions (session_id, subject_sub, client_id, service_id, redirect_uri, scope, access_token_hash, access_create_at, access_expires_in_seconds)
-VALUES (?, ?, ?, 'mealie', 'https://example.com/callback', 'mcp:mealie', ?, ?, 3600);`, make([]byte, 16), claims.Sub, client.ID, hashOpaqueValue("corrupt-access-token"), formatSQLiteTime(now))
+VALUES (?, ?, ?, 'example-a', 'https://example.com/callback', 'mcp:example-a', ?, ?, 3600);`, make([]byte, 16), claims.Sub, client.ID, hashOpaqueValue("corrupt-access-token"), formatSQLiteTime(now))
 	require.NoError(t, err)
 	_, err = storeValue.GetByAccess(ctx, "corrupt-access-token")
 	require.ErrorContains(t, err, "parse oauth session id")
 
-	require.NoError(t, storeValue.RecordAuditEvent(ctx, edgeAuditEvent{CorrelationID: "correlation-1", ActorSubjectSub: claims.Sub, ServiceID: "mealie", EventType: "test.audit", EventStatus: "ok", Payload: map[string]any{"source": "integration-test"}}))
+	require.NoError(t, storeValue.RecordAuditEvent(ctx, edgeAuditEvent{CorrelationID: "correlation-1", ActorSubjectSub: claims.Sub, ServiceID: "example-a", EventType: "test.audit", EventStatus: "ok", Payload: map[string]any{"source": "integration-test"}}))
 	auditCount, err := storeValue.queries.CountAuditEventsByType(ctx, platformdb.CountAuditEventsByTypeParams{EventType: "test.audit"})
 	require.NoError(t, err)
 	require.Equal(t, int64(1), auditCount)
@@ -337,10 +375,11 @@ func TestDatabaseResolverAllowsStaticUpstreamExternalHost(t *testing.T) {
 	defer cpStore.Close()
 	require.NoError(t, cpStore.RunMigrations(ctx))
 	require.NoError(t, cpStore.SeedServiceCatalog(ctx))
+	registerSQLiteEdgeTestService(t, ctx, cpStore, databaseURL, "example-a", false)
 
 	subject := domain.Subject{Sub: "static-user", SubjectKey: "static-user"}
-	require.NoError(t, cpStore.UpsertManualServiceGrant(ctx, subject, "mealie"))
-	require.NoError(t, cpStore.UpsertStaticTenantUpstream(ctx, subject, "mealie", "https://mcp.lan:9443", time.Now().UTC()))
+	require.NoError(t, cpStore.UpsertManualServiceGrant(ctx, subject, "example-a"))
+	require.NoError(t, cpStore.UpsertStaticTenantUpstream(ctx, subject, "example-a", "https://mcp.lan:9443", time.Now().UTC()))
 
 	secretPath := filepath.Join(t.TempDir(), "session-key")
 	require.NoError(t, os.WriteFile(secretPath, []byte("test-session-encryption-key"), 0o600))
@@ -359,7 +398,7 @@ func TestDatabaseResolverAllowsStaticUpstreamExternalHost(t *testing.T) {
 	}
 	t.Cleanup(func() { lookupTenantUpstreamIP = previousLookup })
 
-	target, err := resolver.Resolve(ctx, "mealie", subject.Sub)
+	target, err := resolver.Resolve(ctx, "example-a", subject.Sub)
 	require.NoError(t, err)
 	require.Equal(t, "mcp.lan:9443", target.BaseURL.Host)
 }
@@ -374,9 +413,10 @@ func TestDatabaseResolverRejectsProvisionedUpstreamHostDrift(t *testing.T) {
 	defer cpStore.Close()
 	require.NoError(t, cpStore.RunMigrations(ctx))
 	require.NoError(t, cpStore.SeedServiceCatalog(ctx))
+	registerSQLiteEdgeTestService(t, ctx, cpStore, databaseURL, "example-a", true)
 	subject := domain.Subject{Sub: "provisioned-user", SubjectKey: "provisioned-user"}
 	require.NoError(t, cpStore.UpsertSubject(ctx, subject))
-	require.NoError(t, cpStore.ReplaceSubjectGrants(ctx, subject.Sub, []controlplane.ServiceGrant{{SubjectSub: subject.Sub, ServiceID: "mealie", SourceGroup: "manual", GrantedAt: time.Now().UTC(), LastSyncedAt: time.Now().UTC()}}))
+	require.NoError(t, cpStore.ReplaceSubjectGrants(ctx, subject.Sub, []controlplane.ServiceGrant{{SubjectSub: subject.Sub, ServiceID: "example-a", SourceGroup: "manual", GrantedAt: time.Now().UTC(), LastSyncedAt: time.Now().UTC()}}))
 	require.NoError(t, cpStore.ReconcileDesiredTenants(ctx))
 	tenants, err := cpStore.ListTenantInstances(ctx)
 	require.NoError(t, err)
@@ -395,14 +435,33 @@ func TestDatabaseResolverRejectsProvisionedUpstreamHostDrift(t *testing.T) {
 	resolver, err := NewDatabaseResolver(cache, edgeStore)
 	require.NoError(t, err)
 
-	_, err = resolver.Resolve(ctx, "mealie", "provisioned-user")
+	_, err = resolver.Resolve(ctx, "example-a", "provisioned-user")
 	require.ErrorContains(t, err, "tenant upstream host does not match internal DNS name")
 
 	require.NoError(t, cpStore.UpdateTenantRuntimeStatus(ctx, controlplane.TenantRuntimeUpdate{TenantID: tenants[0].TenantID, RuntimeState: domain.TenantRuntimeStateReady, UpstreamURL: "http://" + tenants[0].InternalDNSName + ":9999/mcp", LastHealthyAt: &now}))
-	_, err = resolver.Resolve(ctx, "mealie", "provisioned-user")
+	_, err = resolver.Resolve(ctx, "example-a", "provisioned-user")
 	require.ErrorContains(t, err, "tenant upstream port does not match service catalog")
 
 	require.NoError(t, cpStore.UpdateTenantRuntimeStatus(ctx, controlplane.TenantRuntimeUpdate{TenantID: tenants[0].TenantID, RuntimeState: domain.TenantRuntimeStateReady, UpstreamURL: "http://" + tenants[0].InternalDNSName + ":3031/wrong", LastHealthyAt: &now}))
-	_, err = resolver.Resolve(ctx, "mealie", "provisioned-user")
+	_, err = resolver.Resolve(ctx, "example-a", "provisioned-user")
 	require.ErrorContains(t, err, "tenant upstream path does not match service catalog")
+}
+
+func registerSQLiteEdgeTestService(t *testing.T, ctx context.Context, store *controlplane.Store, databaseURL string, serviceID string, builtin bool) {
+	t.Helper()
+	for _, entry := range testServiceCatalogEntries() {
+		if entry.ServiceID != serviceID {
+			continue
+		}
+		require.NoError(t, store.UpsertAdminServiceCatalogEntry(ctx, entry))
+		if builtin {
+			db, err := platformsqlite.Open(ctx, databaseURL)
+			require.NoError(t, err)
+			defer db.Close()
+			_, err = db.ExecContext(ctx, `UPDATE service_catalog SET source = 'builtin' WHERE service_id = ?`, serviceID)
+			require.NoError(t, err)
+		}
+		return
+	}
+	require.Failf(t, "missing test service", "service %q is not defined", serviceID)
 }

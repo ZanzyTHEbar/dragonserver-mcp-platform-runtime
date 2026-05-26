@@ -37,16 +37,6 @@ func TestConfigValidateRejectsTenantRuntimeWithoutDependencyConfig(t *testing.T)
 	require.ErrorContains(t, err, "tenant runtime configuration requires full external dependency configuration")
 }
 
-func TestConfigValidateRejectsTenantRuntimeWithoutRenderPrereqs(t *testing.T) {
-	t.Parallel()
-
-	cfg := validTenantRuntimeControlPlaneConfig()
-	cfg.MealieBaseURL = ""
-
-	err := cfg.Validate()
-	require.ErrorContains(t, err, "MCP_CONTROL_PLANE_MEALIE_BASE_URL")
-}
-
 func TestConfigValidateRejectsInvalidDockerNetworkName(t *testing.T) {
 	t.Parallel()
 
@@ -70,54 +60,12 @@ func TestConfigValidateAllowsCompleteTenantRuntimeConfig(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 }
 
-func TestConfigValidatePinnedTenantImageModeRequiresImmutableDigests(t *testing.T) {
-	t.Parallel()
-
-	cfg := validTenantRuntimeControlPlaneConfig()
-	cfg.PlatformEnv = "production"
-	cfg.TenantImageMode = "pinned"
-	cfg.TenantImageMealie = "ghcr.io/example/mealie:latest"
-	cfg.TenantImageActualBudget = "ghcr.io/example/actual@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	cfg.TenantImageMemory = "ghcr.io/example/memory@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-	err := cfg.Validate()
-	require.ErrorContains(t, err, "MCP_CONTROL_PLANE_TENANT_IMAGE_MEALIE must use an immutable digest")
-
-	cfg.TenantImageMealie = "ghcr.io/example/mealie"
-	err = cfg.Validate()
-	require.ErrorContains(t, err, "MCP_CONTROL_PLANE_TENANT_IMAGE_MEALIE must use an immutable digest")
-
-	cfg.TenantImageMealie = "ghcr.io/example/mealie:v1.2.3"
-	err = cfg.Validate()
-	require.ErrorContains(t, err, "MCP_CONTROL_PLANE_TENANT_IMAGE_MEALIE must use an immutable digest")
-
-	cfg.TenantImageMealie = "ghcr.io/example/mealie@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-	require.NoError(t, cfg.Validate())
-}
-
-func TestConfigValidatePinnedTenantImageModeRequiresDigestsOutsideProduction(t *testing.T) {
-	t.Parallel()
-
-	cfg := validTenantRuntimeControlPlaneConfig()
-	cfg.PlatformEnv = "development"
-	cfg.TenantImageMode = "pinned"
-	cfg.TenantImageMealie = "mealie-mcp:latest"
-	cfg.TenantImageActualBudget = "actual-mcp-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	cfg.TenantImageMemory = "mcp-memory-libsql-go@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-
-	err := cfg.Validate()
-	require.ErrorContains(t, err, "MCP_CONTROL_PLANE_TENANT_IMAGE_MEALIE must use an immutable digest")
-}
-
 func TestConfigValidateAllowsLocalTenantImagesInProduction(t *testing.T) {
 	t.Parallel()
 
 	cfg := validTenantRuntimeControlPlaneConfig()
 	cfg.PlatformEnv = "production"
 	cfg.TenantImageMode = "local"
-	cfg.TenantImageMealie = "example-service-a:latest"
-	cfg.TenantImageActualBudget = "actual-mcp-server:latest"
-	cfg.TenantImageMemory = "example-service-c:latest"
 
 	require.NoError(t, cfg.Validate())
 }
@@ -158,7 +106,5 @@ func validTenantRuntimeControlPlaneConfig() Config {
 	cfg.CoolifyEnvironmentUUID = "environment-uuid"
 	cfg.CoolifyServerUUID = "server-uuid"
 	cfg.CoolifyDestinationUUID = "destination-uuid"
-	cfg.MealieBaseURL = "https://mealie.internal"
-	cfg.ActualServerURL = "https://actual.internal"
 	return cfg
 }

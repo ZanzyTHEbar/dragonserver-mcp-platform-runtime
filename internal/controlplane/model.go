@@ -43,6 +43,88 @@ type StaticUpstreamBinding struct {
 	VerifiedAt  time.Time `json:"verified_at"`
 }
 
+type MemoryBankProject struct {
+	ProjectID       ids.UUID        `json:"project_id"`
+	OwnerSubjectSub string          `json:"owner_subject_sub"`
+	OwnerTenantID   ids.UUID        `json:"owner_tenant_id"`
+	ServiceID       string          `json:"service_id"`
+	ProjectKey      string          `json:"project_key"`
+	DisplayName     string          `json:"display_name"`
+	RootPath        string          `json:"root_path"`
+	Metadata        json.RawMessage `json:"metadata"`
+	ArchivedAt      *time.Time      `json:"archived_at,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+}
+
+type MemoryBankProjectShare struct {
+	ShareID                ids.UUID        `json:"share_id"`
+	ProjectID              ids.UUID        `json:"project_id"`
+	OwnerSubjectSub        string          `json:"owner_subject_sub"`
+	CollaboratorSubjectSub string          `json:"collaborator_subject_sub"`
+	Permission             string          `json:"permission"`
+	State                  string          `json:"state"`
+	Source                 string          `json:"source"`
+	CreatedBySubjectSub    string          `json:"created_by_subject_sub"`
+	AcceptedAt             *time.Time      `json:"accepted_at,omitempty"`
+	RevokedAt              *time.Time      `json:"revoked_at,omitempty"`
+	ExpiresAt              *time.Time      `json:"expires_at,omitempty"`
+	Metadata               json.RawMessage `json:"metadata"`
+	CreatedAt              time.Time       `json:"created_at"`
+	UpdatedAt              time.Time       `json:"updated_at"`
+}
+
+type TenantRuntimeSpec struct {
+	SpecID              ids.UUID        `json:"spec_id"`
+	TenantID            ids.UUID        `json:"tenant_id"`
+	ServiceID           string          `json:"service_id"`
+	SubjectSub          string          `json:"subject_sub"`
+	SpecVersion         string          `json:"spec_version"`
+	ComposeHash         string          `json:"compose_hash"`
+	EnvContractHash     string          `json:"env_contract_hash"`
+	SecretContractHash  string          `json:"secret_contract_hash"`
+	ImageRefsJSON       json.RawMessage `json:"image_refs_json"`
+	NetworkPolicyJSON   json.RawMessage `json:"network_policy_json"`
+	IdentityContextHash string          `json:"identity_context_hash"`
+	CreatedAt           time.Time       `json:"created_at"`
+}
+
+type TenantRuntimeMeasurement struct {
+	MeasurementID     ids.UUID        `json:"measurement_id"`
+	TenantID          ids.UUID        `json:"tenant_id"`
+	CoolifyResourceID string          `json:"coolify_resource_id,omitempty"`
+	ContainerID       string          `json:"container_id,omitempty"`
+	Source            string          `json:"source"`
+	ImageRef          string          `json:"image_ref,omitempty"`
+	ImageDigest       string          `json:"image_digest,omitempty"`
+	ComposeHash       string          `json:"compose_hash,omitempty"`
+	EnvContractHash   string          `json:"env_contract_hash,omitempty"`
+	NetworkJSON       json.RawMessage `json:"network_json"`
+	PortsJSON         json.RawMessage `json:"ports_json"`
+	VolumesJSON       json.RawMessage `json:"volumes_json"`
+	HealthStatus      string          `json:"health_status"`
+	RawSummaryJSON    json.RawMessage `json:"raw_summary_json"`
+	MeasuredAt        time.Time       `json:"measured_at"`
+}
+
+type TenantRuntimeAttestation struct {
+	AttestationID      ids.UUID        `json:"attestation_id"`
+	TenantID           ids.UUID        `json:"tenant_id"`
+	SpecID             ids.UUID        `json:"spec_id,omitempty"`
+	MeasurementID      ids.UUID        `json:"measurement_id,omitempty"`
+	PolicyVersion      string          `json:"policy_version"`
+	Verdict            string          `json:"verdict"`
+	FailureReasonsJSON json.RawMessage `json:"failure_reasons_json"`
+	ExpiresAt          *time.Time      `json:"expires_at,omitempty"`
+	CreatedAt          time.Time       `json:"created_at"`
+}
+
+type TenantRuntimeObservation struct {
+	Spec        TenantRuntimeSpec
+	Measurement TenantRuntimeMeasurement
+	Attestation TenantRuntimeAttestation
+}
+
 type TenantInstance struct {
 	TenantID             ids.UUID
 	SubjectSub           string
@@ -60,6 +142,10 @@ type TenantInstance struct {
 	LastReconciledAt     *time.Time
 	LastError            string
 	Metadata             json.RawMessage
+	AttestationState     string
+	LastAttestedAt       *time.Time
+	LastAttestationID    ids.UUID
+	RuntimeSpecID        ids.UUID
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }

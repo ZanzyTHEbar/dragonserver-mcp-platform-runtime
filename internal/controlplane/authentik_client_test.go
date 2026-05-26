@@ -79,11 +79,7 @@ func TestAuthentikClientBuildGrantSnapshot(t *testing.T) {
 			writeTestJSON(t, w, map[string]any{
 				"next": "",
 				"results": []map[string]any{
-					{
-						"pk":    11,
-						"name":  "mcp-service-mealie",
-						"users": []any{1},
-					},
+					{"pk": 11, "name": "mcp-service-example-a", "users": []any{1}},
 					{
 						"pk":    12,
 						"name":  "mcp-admin",
@@ -100,10 +96,10 @@ func TestAuthentikClientBuildGrantSnapshot(t *testing.T) {
 	client, err := NewAuthentikClient(server.URL, "client-id", "client-secret", zerolog.Nop())
 	require.NoError(t, err)
 
-	subjects, grants, err := client.buildGrantSnapshot(context.Background(), testBuiltinServiceIDs())
+	subjects, grants, err := client.buildGrantSnapshot(context.Background(), testSupportedServiceIDs())
 	require.NoError(t, err)
 	require.Len(t, subjects, 3)
-	require.Len(t, grants, 4)
+	require.Len(t, grants, 3)
 
 	require.Equal(t, "subject-sub-1", subjects[0].Sub)
 	require.Equal(t, "subject-sub-2", subjects[1].Sub)
@@ -113,10 +109,9 @@ func TestAuthentikClientBuildGrantSnapshot(t *testing.T) {
 	for _, grant := range grants {
 		grantSet[grant.SubjectSub+"::"+grant.ServiceID] = grant.SourceGroup
 	}
-	require.Equal(t, "mcp-service-mealie", grantSet["subject-sub-1::mealie"])
-	require.Equal(t, "mcp-admin", grantSet["subject-sub-2::mealie"])
-	require.Equal(t, "mcp-admin", grantSet["subject-sub-2::actualbudget"])
-	require.Equal(t, "mcp-admin", grantSet["subject-sub-2::memory"])
+	require.Equal(t, "mcp-service-example-a", grantSet["subject-sub-1::example-a"])
+	require.Equal(t, "mcp-admin", grantSet["subject-sub-2::example-a"])
+	require.Equal(t, "mcp-admin", grantSet["subject-sub-2::example-b"])
 	require.Equal(t, 1, tokenCalls)
 }
 
@@ -204,16 +199,8 @@ func TestAuthentikClientBuildGrantSnapshotSkipsMalformedRecordsAndUnknownMapping
 			writeTestJSON(t, w, map[string]any{
 				"next": "",
 				"results": []map[string]any{
-					{
-						"pk":    11,
-						"name":  "mcp-service-mealie",
-						"users": []any{1, map[string]any{"unexpected": "value"}},
-					},
-					{
-						"pk":    []any{"bad"},
-						"name":  "mcp-service-memory",
-						"users": []any{3},
-					},
+					{"pk": 11, "name": "mcp-service-example-a", "users": []any{1, map[string]any{"unexpected": "value"}}},
+					{"pk": []any{"bad"}, "name": "mcp-service-example-b", "users": []any{3}},
 					{
 						"pk":    13,
 						"name":  "mcp-service-unknown",
@@ -235,10 +222,10 @@ func TestAuthentikClientBuildGrantSnapshotSkipsMalformedRecordsAndUnknownMapping
 	client, err := NewAuthentikClient(server.URL, "client-id", "client-secret", zerolog.Nop())
 	require.NoError(t, err)
 
-	subjects, grants, err := client.buildGrantSnapshot(context.Background(), testBuiltinServiceIDs())
+	subjects, grants, err := client.buildGrantSnapshot(context.Background(), testSupportedServiceIDs())
 	require.NoError(t, err)
 	require.Len(t, subjects, 2)
-	require.Len(t, grants, 4)
+	require.Len(t, grants, 3)
 
 	subjectSubs := []string{subjects[0].Sub, subjects[1].Sub}
 	require.ElementsMatch(t, []string{"subject-sub-1", "subject-sub-3"}, subjectSubs)
@@ -248,10 +235,9 @@ func TestAuthentikClientBuildGrantSnapshotSkipsMalformedRecordsAndUnknownMapping
 		grantSet[grant.SubjectSub+"::"+grant.ServiceID] = grant.SourceGroup
 	}
 
-	require.Equal(t, "mcp-service-mealie", grantSet["subject-sub-1::mealie"])
-	require.Equal(t, "mcp-admin", grantSet["subject-sub-3::mealie"])
-	require.Equal(t, "mcp-admin", grantSet["subject-sub-3::actualbudget"])
-	require.Equal(t, "mcp-admin", grantSet["subject-sub-3::memory"])
+	require.Equal(t, "mcp-service-example-a", grantSet["subject-sub-1::example-a"])
+	require.Equal(t, "mcp-admin", grantSet["subject-sub-3::example-a"])
+	require.Equal(t, "mcp-admin", grantSet["subject-sub-3::example-b"])
 	_, hasUnknownGrant := grantSet["subject-sub-3::unknown"]
 	require.False(t, hasUnknownGrant)
 }
@@ -265,8 +251,6 @@ func TestAuthentikClientSyncStoreUsesEnabledServiceCatalog(t *testing.T) {
 	defer store.Close()
 	require.NoError(t, store.RunMigrations(ctx))
 	require.NoError(t, store.SeedServiceCatalog(ctx))
-	_, err = store.db.ExecContext(ctx, `UPDATE service_catalog SET enabled = 0 WHERE service_id = 'memory'`)
-	require.NoError(t, err)
 	require.NoError(t, store.UpsertAdminServiceCatalogEntry(ctx, catalog.ServiceCatalogEntry{
 		ServiceID:              "custom",
 		DisplayName:            "Custom MCP",
@@ -342,27 +326,19 @@ func TestAuthentikClientSyncStoreUsesEnabledServiceCatalog(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, client.SyncStore(ctx, store))
 
-	grants, err := store.queries.ListDesiredTenantSpecs(ctx)
+	grants, err := store.ListSubjectServiceGrants(ctx, "subject-sub-2")
 	require.NoError(t, err)
 	grantSet := make(map[string]string)
 	for _, grant := range grants {
 		grantSet[grant.SubjectSub+"::"+grant.ServiceID] = grant.ServiceID
 	}
 	require.Equal(t, map[string]string{
-		"subject-sub-1::custom":       "custom",
-		"subject-sub-2::actualbudget": "actualbudget",
-		"subject-sub-2::custom":       "custom",
-		"subject-sub-2::mealie":       "mealie",
+		"subject-sub-2::custom": "custom",
 	}, grantSet)
 }
 
-func testBuiltinServiceIDs() []string {
-	services := catalog.DefaultCatalogV1()
-	serviceIDs := make([]string, 0, len(services))
-	for _, service := range services {
-		serviceIDs = append(serviceIDs, service.ServiceID)
-	}
-	return serviceIDs
+func testSupportedServiceIDs() []string {
+	return []string{"example-a", "example-b"}
 }
 
 func TestAuthentikClientIncludesResponseBodyInHTTPStatusErrors(t *testing.T) {

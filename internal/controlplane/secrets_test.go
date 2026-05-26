@@ -11,9 +11,9 @@ import (
 func TestSplitInfisicalSecretReference(t *testing.T) {
 	t.Parallel()
 
-	secretPath, secretKey, err := SplitInfisicalSecretReference("/subjects/u-123/services/mealie/api-token")
+	secretPath, secretKey, err := SplitInfisicalSecretReference("/subjects/u-123/services/example-a/api-token")
 	require.NoError(t, err)
-	require.Equal(t, "/subjects/u-123/services/mealie", secretPath)
+	require.Equal(t, "/subjects/u-123/services/example-a", secretPath)
 	require.Equal(t, "api-token", secretKey)
 }
 

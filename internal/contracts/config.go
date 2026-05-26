@@ -48,10 +48,5 @@ const (
 	EnvControlPlaneInfisicalEnvSlug                 = "MCP_CONTROL_PLANE_INFISICAL_ENV_SLUG"
 	EnvControlPlaneInfisicalMachineClientID         = "MCP_CONTROL_PLANE_INFISICAL_MACHINE_CLIENT_ID"
 	EnvControlPlaneInfisicalMachineClientSecretPath = "MCP_CONTROL_PLANE_INFISICAL_MACHINE_CLIENT_SECRET_PATH"
-	EnvControlPlaneMealieBaseURL                    = "MCP_CONTROL_PLANE_MEALIE_BASE_URL"
-	EnvControlPlaneActualServerURL                  = "MCP_CONTROL_PLANE_ACTUAL_SERVER_URL"
-	EnvControlPlaneTenantImageMealie                = "MCP_CONTROL_PLANE_TENANT_IMAGE_MEALIE"
-	EnvControlPlaneTenantImageActualBudget          = "MCP_CONTROL_PLANE_TENANT_IMAGE_ACTUALBUDGET"
-	EnvControlPlaneTenantImageMemory                = "MCP_CONTROL_PLANE_TENANT_IMAGE_MEMORY"
 	EnvControlPlaneTenantImageMode                  = "MCP_CONTROL_PLANE_TENANT_IMAGE_MODE"
 )

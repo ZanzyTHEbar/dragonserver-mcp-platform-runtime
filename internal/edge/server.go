@@ -35,6 +35,7 @@ type Server struct {
 	stateStore                edgeStateStore
 	oauth                     *OAuthService
 	auth                      *AuthRuntime
+	grants                    GrantAuthorizer
 	identityHeaderSigner      *identityHeaderSigner
 	bridgeMu                  sync.Mutex
 	sseBridges                map[string]http.Handler
@@ -88,8 +89,15 @@ func NewServerWithStateStore(ctx context.Context, cfg Config, logger zerolog.Log
 		}
 		return nil, err
 	}
+	grantAuthorizer, err := newPolicyGrantAuthorizer(stateStore)
+	if err != nil {
+		if stateStoreOwned {
+			_ = stateStore.Close()
+		}
+		return nil, err
+	}
 	serviceDirectory := NewServiceDirectory(cfg.PublicBaseURL, catalogCache)
-	oauthService, err := NewOAuthService(cfg, logger, catalogCache, serviceDirectory, stateStore, authRuntime, authRuntime)
+	oauthService, err := NewOAuthService(cfg, logger, catalogCache, serviceDirectory, stateStore, grantAuthorizer, authRuntime)
 	if err != nil {
 		if stateStoreOwned {
 			_ = stateStore.Close()
@@ -107,6 +115,7 @@ func NewServerWithStateStore(ctx context.Context, cfg Config, logger zerolog.Log
 		corsAllowedOrigins:        append([]string(nil), cfg.CORSAllowedOrigins...),
 		stateStore:                stateStore,
 		auth:                      authRuntime,
+		grants:                    grantAuthorizer,
 		oauth:                     oauthService,
 		identityHeaderSigner:      newIdentityHeaderSigner(cfg.IdentityHeaderSecretPath),
 		sseBridges:                make(map[string]http.Handler),
@@ -421,8 +430,8 @@ func (s *Server) handleServiceRoute(resolution ServiceResolution) http.HandlerFu
 			writeJSONError(w, http.StatusUnauthorized, "invalid_token", "token resource does not cover this MCP service")
 			return
 		}
-		if s.auth != nil {
-			allowed, err := s.auth.Allowed(r.Context(), tokenInfo.GetUserID(), service.ServiceID)
+		if s.grants != nil {
+			allowed, err := s.grants.Allowed(r.Context(), tokenInfo.GetUserID(), service.ServiceID)
 			if err != nil {
 				s.logger.Error().
 					Err(err).
@@ -447,6 +456,36 @@ func (s *Server) handleServiceRoute(resolution ServiceResolution) http.HandlerFu
 				})
 				writeJSONError(w, http.StatusForbidden, "service_not_granted", "subject is not entitled to this MCP service")
 				return
+			}
+		}
+		mcpObservation, observedRequest, err := observeMCPRequest(r)
+		if err != nil {
+			s.logger.Warn().
+				Err(err).
+				Str("service_id", service.ServiceID).
+				Str("subject_sub", tokenInfo.GetUserID()).
+				Msg("mcp request inspection failed")
+		} else {
+			r = observedRequest
+			if mcpObservation.Method != "" {
+				s.recordAuditEvent(r.Context(), edgeAuditEvent{
+					ActorSubjectSub: tokenInfo.GetUserID(),
+					ServiceID:       service.ServiceID,
+					EventType:       "mcp.capability.observed",
+					EventStatus:     "observed",
+					Payload: map[string]any{
+						"method":     mcpObservation.Method,
+						"methods":    mcpObservation.Methods,
+						"tool_name":  mcpObservation.ToolName,
+						"tool_names": mcpObservation.ToolNames,
+						"prompt":     mcpObservation.Prompt,
+						"prompts":    mcpObservation.Prompts,
+						"resource":   mcpObservation.Resource,
+						"resources":  mcpObservation.Resources,
+						"batch":      mcpObservation.Batch,
+						"batch_size": mcpObservation.BatchSize,
+					},
+				})
 			}
 		}
 

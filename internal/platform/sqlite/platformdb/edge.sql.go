@@ -124,7 +124,7 @@ const ConsumeOAuthSessionByCodeHash = `-- name: ConsumeOAuthSessionByCodeHash :o
 UPDATE oauth_sessions
 SET consumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 WHERE authorization_code_hash = ?1 AND consumed_at IS NULL
-RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 `
 
 type ConsumeOAuthSessionByCodeHashParams struct {
@@ -156,6 +156,9 @@ type ConsumeOAuthSessionByCodeHashRow struct {
 	ExpiresAt                   sql.NullString `db:"expires_at" json:"expires_at"`
 	IssuedVia                   string         `db:"issued_via" json:"issued_via"`
 	OperatorReason              sql.NullString `db:"operator_reason" json:"operator_reason"`
+	AuthorizationDetails        string         `db:"authorization_details" json:"authorization_details"`
+	PolicyBindingID             sql.NullString `db:"policy_binding_id" json:"policy_binding_id"`
+	ShareID                     []byte         `db:"share_id" json:"share_id"`
 }
 
 // ConsumeOAuthSessionByCodeHash
@@ -163,7 +166,7 @@ type ConsumeOAuthSessionByCodeHashRow struct {
 //	UPDATE oauth_sessions
 //	SET consumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 //	WHERE authorization_code_hash = ?1 AND consumed_at IS NULL
-//	RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+//	RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 func (q *Queries) ConsumeOAuthSessionByCodeHash(ctx context.Context, arg ConsumeOAuthSessionByCodeHashParams) (ConsumeOAuthSessionByCodeHashRow, error) {
 	row := q.db.QueryRowContext(ctx, ConsumeOAuthSessionByCodeHash, arg.AuthorizationCodeHash)
 	var i ConsumeOAuthSessionByCodeHashRow
@@ -192,6 +195,9 @@ func (q *Queries) ConsumeOAuthSessionByCodeHash(ctx context.Context, arg Consume
 		&i.ExpiresAt,
 		&i.IssuedVia,
 		&i.OperatorReason,
+		&i.AuthorizationDetails,
+		&i.PolicyBindingID,
+		&i.ShareID,
 	)
 	return i, err
 }
@@ -200,7 +206,7 @@ const ConsumeOAuthSessionByRefreshHash = `-- name: ConsumeOAuthSessionByRefreshH
 UPDATE oauth_sessions
 SET consumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 WHERE refresh_token_hash = ?1 AND consumed_at IS NULL
-RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 `
 
 type ConsumeOAuthSessionByRefreshHashParams struct {
@@ -232,6 +238,9 @@ type ConsumeOAuthSessionByRefreshHashRow struct {
 	ExpiresAt                   sql.NullString `db:"expires_at" json:"expires_at"`
 	IssuedVia                   string         `db:"issued_via" json:"issued_via"`
 	OperatorReason              sql.NullString `db:"operator_reason" json:"operator_reason"`
+	AuthorizationDetails        string         `db:"authorization_details" json:"authorization_details"`
+	PolicyBindingID             sql.NullString `db:"policy_binding_id" json:"policy_binding_id"`
+	ShareID                     []byte         `db:"share_id" json:"share_id"`
 }
 
 // ConsumeOAuthSessionByRefreshHash
@@ -239,7 +248,7 @@ type ConsumeOAuthSessionByRefreshHashRow struct {
 //	UPDATE oauth_sessions
 //	SET consumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
 //	WHERE refresh_token_hash = ?1 AND consumed_at IS NULL
-//	RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+//	RETURNING session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 func (q *Queries) ConsumeOAuthSessionByRefreshHash(ctx context.Context, arg ConsumeOAuthSessionByRefreshHashParams) (ConsumeOAuthSessionByRefreshHashRow, error) {
 	row := q.db.QueryRowContext(ctx, ConsumeOAuthSessionByRefreshHash, arg.RefreshTokenHash)
 	var i ConsumeOAuthSessionByRefreshHashRow
@@ -268,6 +277,9 @@ func (q *Queries) ConsumeOAuthSessionByRefreshHash(ctx context.Context, arg Cons
 		&i.ExpiresAt,
 		&i.IssuedVia,
 		&i.OperatorReason,
+		&i.AuthorizationDetails,
+		&i.PolicyBindingID,
+		&i.ShareID,
 	)
 	return i, err
 }
@@ -881,7 +893,7 @@ func (q *Queries) GetOAuthClient(ctx context.Context, arg GetOAuthClientParams) 
 }
 
 const GetOAuthSessionByAccessHash = `-- name: GetOAuthSessionByAccessHash :one
-SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 FROM oauth_sessions
 WHERE access_token_hash = ?1
 `
@@ -915,11 +927,14 @@ type GetOAuthSessionByAccessHashRow struct {
 	ExpiresAt                   sql.NullString `db:"expires_at" json:"expires_at"`
 	IssuedVia                   string         `db:"issued_via" json:"issued_via"`
 	OperatorReason              sql.NullString `db:"operator_reason" json:"operator_reason"`
+	AuthorizationDetails        string         `db:"authorization_details" json:"authorization_details"`
+	PolicyBindingID             sql.NullString `db:"policy_binding_id" json:"policy_binding_id"`
+	ShareID                     []byte         `db:"share_id" json:"share_id"`
 }
 
 // GetOAuthSessionByAccessHash
 //
-//	SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+//	SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 //	FROM oauth_sessions
 //	WHERE access_token_hash = ?1
 func (q *Queries) GetOAuthSessionByAccessHash(ctx context.Context, arg GetOAuthSessionByAccessHashParams) (GetOAuthSessionByAccessHashRow, error) {
@@ -950,12 +965,15 @@ func (q *Queries) GetOAuthSessionByAccessHash(ctx context.Context, arg GetOAuthS
 		&i.ExpiresAt,
 		&i.IssuedVia,
 		&i.OperatorReason,
+		&i.AuthorizationDetails,
+		&i.PolicyBindingID,
+		&i.ShareID,
 	)
 	return i, err
 }
 
 const GetOAuthSessionByCodeHash = `-- name: GetOAuthSessionByCodeHash :one
-SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 FROM oauth_sessions
 WHERE authorization_code_hash = ?1 AND consumed_at IS NULL
 `
@@ -989,11 +1007,14 @@ type GetOAuthSessionByCodeHashRow struct {
 	ExpiresAt                   sql.NullString `db:"expires_at" json:"expires_at"`
 	IssuedVia                   string         `db:"issued_via" json:"issued_via"`
 	OperatorReason              sql.NullString `db:"operator_reason" json:"operator_reason"`
+	AuthorizationDetails        string         `db:"authorization_details" json:"authorization_details"`
+	PolicyBindingID             sql.NullString `db:"policy_binding_id" json:"policy_binding_id"`
+	ShareID                     []byte         `db:"share_id" json:"share_id"`
 }
 
 // GetOAuthSessionByCodeHash
 //
-//	SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+//	SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 //	FROM oauth_sessions
 //	WHERE authorization_code_hash = ?1 AND consumed_at IS NULL
 func (q *Queries) GetOAuthSessionByCodeHash(ctx context.Context, arg GetOAuthSessionByCodeHashParams) (GetOAuthSessionByCodeHashRow, error) {
@@ -1024,12 +1045,15 @@ func (q *Queries) GetOAuthSessionByCodeHash(ctx context.Context, arg GetOAuthSes
 		&i.ExpiresAt,
 		&i.IssuedVia,
 		&i.OperatorReason,
+		&i.AuthorizationDetails,
+		&i.PolicyBindingID,
+		&i.ShareID,
 	)
 	return i, err
 }
 
 const GetOAuthSessionByRefreshHash = `-- name: GetOAuthSessionByRefreshHash :one
-SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 FROM oauth_sessions
 WHERE refresh_token_hash = ?1
 `
@@ -1063,11 +1087,14 @@ type GetOAuthSessionByRefreshHashRow struct {
 	ExpiresAt                   sql.NullString `db:"expires_at" json:"expires_at"`
 	IssuedVia                   string         `db:"issued_via" json:"issued_via"`
 	OperatorReason              sql.NullString `db:"operator_reason" json:"operator_reason"`
+	AuthorizationDetails        string         `db:"authorization_details" json:"authorization_details"`
+	PolicyBindingID             sql.NullString `db:"policy_binding_id" json:"policy_binding_id"`
+	ShareID                     []byte         `db:"share_id" json:"share_id"`
 }
 
 // GetOAuthSessionByRefreshHash
 //
-//	SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason
+//	SELECT session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id
 //	FROM oauth_sessions
 //	WHERE refresh_token_hash = ?1
 func (q *Queries) GetOAuthSessionByRefreshHash(ctx context.Context, arg GetOAuthSessionByRefreshHashParams) (GetOAuthSessionByRefreshHashRow, error) {
@@ -1098,6 +1125,9 @@ func (q *Queries) GetOAuthSessionByRefreshHash(ctx context.Context, arg GetOAuth
 		&i.ExpiresAt,
 		&i.IssuedVia,
 		&i.OperatorReason,
+		&i.AuthorizationDetails,
+		&i.PolicyBindingID,
+		&i.ShareID,
 	)
 	return i, err
 }
@@ -1381,8 +1411,8 @@ func (q *Queries) UpdateDeviceAuthorizationPoll(ctx context.Context, arg UpdateD
 }
 
 const UpsertOAuthSession = `-- name: UpsertOAuthSession :exec
-INSERT INTO oauth_sessions (session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, consumed_at, updated_at)
-VALUES (?1, NULLIF(?2, ''), ?3, NULLIF(?4, ''), ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''), ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, NULL, CURRENT_TIMESTAMP)
+INSERT INTO oauth_sessions (session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id, consumed_at, updated_at)
+VALUES (?1, NULLIF(?2, ''), ?3, NULLIF(?4, ''), ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''), ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, NULLIF(?27, X''), NULL, CURRENT_TIMESTAMP)
 ON CONFLICT(session_id) DO UPDATE SET
     subject_sub = excluded.subject_sub,
     client_id = excluded.client_id,
@@ -1407,6 +1437,9 @@ ON CONFLICT(session_id) DO UPDATE SET
     expires_at = excluded.expires_at,
     issued_via = excluded.issued_via,
     operator_reason = excluded.operator_reason,
+    authorization_details = excluded.authorization_details,
+    policy_binding_id = excluded.policy_binding_id,
+    share_id = excluded.share_id,
     consumed_at = NULL,
     updated_at = CURRENT_TIMESTAMP
 `
@@ -1436,12 +1469,15 @@ type UpsertOAuthSessionParams struct {
 	ExpiresAt                   sql.NullString `db:"expires_at" json:"expires_at"`
 	IssuedVia                   string         `db:"issued_via" json:"issued_via"`
 	OperatorReason              sql.NullString `db:"operator_reason" json:"operator_reason"`
+	AuthorizationDetails        string         `db:"authorization_details" json:"authorization_details"`
+	PolicyBindingID             sql.NullString `db:"policy_binding_id" json:"policy_binding_id"`
+	ShareID                     interface{}    `db:"share_id" json:"share_id"`
 }
 
 // UpsertOAuthSession
 //
-//	INSERT INTO oauth_sessions (session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, consumed_at, updated_at)
-//	VALUES (?1, NULLIF(?2, ''), ?3, NULLIF(?4, ''), ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''), ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, NULL, CURRENT_TIMESTAMP)
+//	INSERT INTO oauth_sessions (session_id, subject_sub, client_id, service_id, resource, redirect_uri, scope, code_challenge, code_challenge_method, authorization_code_hash, authorization_code_ciphertext, access_token_hash, access_token_ciphertext, refresh_token_hash, refresh_token_ciphertext, code_create_at, code_expires_in_seconds, access_create_at, access_expires_in_seconds, refresh_create_at, refresh_expires_in_seconds, expires_at, issued_via, operator_reason, authorization_details, policy_binding_id, share_id, consumed_at, updated_at)
+//	VALUES (?1, NULLIF(?2, ''), ?3, NULLIF(?4, ''), ?5, ?6, ?7, NULLIF(?8, ''), NULLIF(?9, ''), ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, NULLIF(?27, X''), NULL, CURRENT_TIMESTAMP)
 //	ON CONFLICT(session_id) DO UPDATE SET
 //	    subject_sub = excluded.subject_sub,
 //	    client_id = excluded.client_id,
@@ -1466,6 +1502,9 @@ type UpsertOAuthSessionParams struct {
 //	    expires_at = excluded.expires_at,
 //	    issued_via = excluded.issued_via,
 //	    operator_reason = excluded.operator_reason,
+//	    authorization_details = excluded.authorization_details,
+//	    policy_binding_id = excluded.policy_binding_id,
+//	    share_id = excluded.share_id,
 //	    consumed_at = NULL,
 //	    updated_at = CURRENT_TIMESTAMP
 func (q *Queries) UpsertOAuthSession(ctx context.Context, arg UpsertOAuthSessionParams) error {
@@ -1494,6 +1533,9 @@ func (q *Queries) UpsertOAuthSession(ctx context.Context, arg UpsertOAuthSession
 		arg.ExpiresAt,
 		arg.IssuedVia,
 		arg.OperatorReason,
+		arg.AuthorizationDetails,
+		arg.PolicyBindingID,
+		arg.ShareID,
 	)
 	return err
 }

@@ -18,7 +18,7 @@ func TestIdentityHeaderSignerBuildsSignedHeaders(t *testing.T) {
 	require.NoError(t, os.WriteFile(secretPath, []byte("shared-secret\n"), 0o600))
 	signer := newIdentityHeaderSigner(secretPath)
 	service := catalog.ServiceCatalogEntry{
-		ServiceID: "penpot",
+		ServiceID: "example-c",
 		IdentityContext: catalog.IdentityContextConfig{
 			Mode: catalog.IdentityContextModeSignedHeaders,
 		},
@@ -39,7 +39,7 @@ func TestIdentityHeaderSignerBuildsSignedHeaders(t *testing.T) {
 
 	values := identityHeaderValues{
 		Version:             identityContextCanonicalVersionV1,
-		ServiceID:           "penpot",
+		ServiceID:           "example-c",
 		SessionID:           "session-id",
 		IssuedAt:            "1234567890",
 		SubjectSub:          "authentik-sub",
@@ -60,7 +60,7 @@ func TestIdentityHeaderSignerRequiresSecretForOptInService(t *testing.T) {
 
 	signer := newIdentityHeaderSigner("")
 	service := catalog.ServiceCatalogEntry{
-		ServiceID: "penpot",
+		ServiceID: "example-c",
 		IdentityContext: catalog.IdentityContextConfig{
 			Mode: catalog.IdentityContextModeSignedHeaders,
 		},

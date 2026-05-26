@@ -140,7 +140,7 @@ func NewAuthRuntime(cfg Config, logger zerolog.Logger, stateStore edgeStateStore
 		Groups:              cfg.FixtureAuthGroups,
 	}
 	if len(claims.Groups) == 0 {
-		claims.Groups = []string{groupMCPUsers, grantGroupForService("mealie")}
+		claims.Groups = []string{groupMCPUsers}
 	}
 	if err := runtime.stateStore.UpsertSubject(context.Background(), claims); err != nil {
 		return nil, err

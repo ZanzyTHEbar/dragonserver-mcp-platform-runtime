@@ -44,6 +44,23 @@ func (a *App) handleSubject(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"subject_sub": subjectSub, "grants": grants})
 		return
 	}
+	if serviceID, resource, resourceTail, ok := parseMemoryBankAdminTail(tail); ok {
+		if err := validateServiceID(serviceID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		switch resource {
+		case "projects":
+			a.handleMemoryBankProjects(w, r, subjectSub, serviceID, resourceTail)
+		case "shares":
+			if r.Method == http.MethodDelete && resourceTail != "" {
+				a.handleMemoryBankShareDelete(w, r, subjectSub, serviceID, resourceTail)
+				return
+			}
+			a.handleMemoryBankShares(w, r, subjectSub, serviceID, resourceTail)
+		}
+		return
+	}
 	if serviceID, ok := parseSubjectServiceUpstreamTail(tail); ok {
 		if err := validateServiceID(serviceID); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -55,6 +72,19 @@ func (a *App) handleSubject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.handleStaticUpstreamPut(w, r, subjectSub, serviceID)
+		return
+	}
+	if serviceID, action, ok := parseSubjectServiceLifecycleTail(tail); ok {
+		if err := validateServiceID(serviceID); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if r.Method != http.MethodPut {
+			w.Header().Set("Allow", http.MethodPut)
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		a.handleTenantLifecyclePut(w, r, subjectSub, serviceID, action)
 		return
 	}
 
@@ -81,6 +111,34 @@ func (a *App) handleSubject(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", strings.Join([]string{http.MethodPut, http.MethodDelete}, ", "))
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
 	}
+}
+
+func (a *App) handleTenantLifecyclePut(w http.ResponseWriter, r *http.Request, subjectSub string, serviceID string, action string) {
+	var err error
+	desiredState := domain.TenantDesiredStateEnabled
+	switch action {
+	case "suspend":
+		desiredState = domain.TenantDesiredStateDisabled
+		err = a.store.SuspendTenantInstance(r.Context(), subjectSub, serviceID)
+	case "resume":
+		err = a.store.ResumeTenantInstance(r.Context(), subjectSub, serviceID)
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		if errors.Is(err, ErrTenantInstanceNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "tenant_not_found"})
+			return
+		}
+		if errors.Is(err, ErrSubjectServiceGrantNotFound) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "service_not_granted"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "tenant_lifecycle_update_failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"subject_sub": subjectSub, "service_id": serviceID, "desired_state": desiredState})
 }
 
 func (a *App) handleManualGrantPut(w http.ResponseWriter, r *http.Request, subjectSub string, serviceID string) {
@@ -124,6 +182,21 @@ func parseSubjectServiceUpstreamTail(tail string) (string, bool) {
 		return "", false
 	}
 	return serviceID, true
+}
+
+func parseSubjectServiceLifecycleTail(tail string) (string, string, bool) {
+	if !strings.HasPrefix(tail, "services/") {
+		return "", "", false
+	}
+	remainder := strings.TrimPrefix(tail, "services/")
+	serviceID, action, ok := strings.Cut(remainder, "/")
+	if !ok || serviceID == "" || strings.Contains(action, "/") {
+		return "", "", false
+	}
+	if action != "suspend" && action != "resume" {
+		return "", "", false
+	}
+	return serviceID, action, true
 }
 
 func parseSubjectAdminPath(requestPath string) (string, string, bool) {

@@ -119,6 +119,7 @@ FROM service_grants
 JOIN subjects ON subjects.subject_sub = service_grants.subject_sub
 JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
 WHERE service_catalog.enabled = 1
+  AND service_catalog.source = 'builtin'
 ORDER BY service_grants.service_id, subjects.subject_sub;
 
 -- name: ListTenantInstances :many
@@ -138,10 +139,68 @@ SELECT tenant_id,
        last_reconciled_at,
        last_error,
        metadata,
+       attestation_state,
+       last_attested_at,
+       last_attestation_id,
+       runtime_spec_id,
        created_at,
        updated_at
 FROM tenant_instances
 ORDER BY service_id, subject_sub;
+
+-- name: GetTenantInstance :one
+SELECT tenant_id,
+       subject_sub,
+       service_id,
+       subject_key,
+       tenant_instance_name,
+       internal_dns_name,
+       desired_state,
+       runtime_state,
+       coolify_resource_id,
+       coolify_application_id,
+       upstream_url,
+       secret_version,
+       last_healthy_at,
+       last_reconciled_at,
+       last_error,
+       metadata,
+       attestation_state,
+       last_attested_at,
+       last_attestation_id,
+       runtime_spec_id,
+       created_at,
+       updated_at
+FROM tenant_instances
+WHERE tenant_id = sqlc.arg(tenant_id);
+
+-- name: GetTenantInstanceBySubjectService :one
+SELECT tenant_id,
+       subject_sub,
+       service_id,
+       subject_key,
+       tenant_instance_name,
+       internal_dns_name,
+       desired_state,
+       runtime_state,
+       coolify_resource_id,
+       coolify_application_id,
+       upstream_url,
+       secret_version,
+       last_healthy_at,
+       last_reconciled_at,
+       last_error,
+       metadata,
+       attestation_state,
+       last_attested_at,
+       last_attestation_id,
+       runtime_spec_id,
+       created_at,
+       updated_at
+FROM tenant_instances
+WHERE subject_sub = sqlc.arg(subject_sub)
+  AND service_id = sqlc.arg(service_id)
+  AND desired_state <> 'deleted';
 
 -- name: InsertTenantInstance :exec
 INSERT INTO tenant_instances (tenant_id, subject_sub, service_id, subject_key, tenant_instance_name, internal_dns_name, desired_state, runtime_state)
@@ -196,6 +255,30 @@ SET desired_state = sqlc.arg(desired_state),
     updated_at = CURRENT_TIMESTAMP
 WHERE tenant_id = sqlc.arg(tenant_id);
 
+-- name: MarkTenantDesiredDisabledBySubjectService :execrows
+UPDATE tenant_instances
+SET desired_state = 'disabled',
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_instances.subject_sub = sqlc.arg(target_subject_sub)
+  AND tenant_instances.service_id = sqlc.arg(target_service_id)
+  AND tenant_instances.desired_state <> 'deleted';
+
+-- name: MarkTenantDesiredEnabledBySubjectServiceWithGrant :execrows
+UPDATE tenant_instances
+SET desired_state = 'enabled',
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_instances.subject_sub = sqlc.arg(target_subject_sub)
+  AND tenant_instances.service_id = sqlc.arg(target_service_id)
+  AND tenant_instances.desired_state <> 'deleted'
+  AND EXISTS (
+    SELECT 1
+    FROM service_grants
+    JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
+    WHERE service_grants.subject_sub = tenant_instances.subject_sub
+      AND service_grants.service_id = tenant_instances.service_id
+      AND service_catalog.enabled = 1
+  );
+
 -- name: EnableTenantInstance :exec
 UPDATE tenant_instances
 SET subject_key = sqlc.arg(subject_key),
@@ -231,3 +314,302 @@ WHERE tenant_id = sqlc.arg(tenant_id);
 
 -- name: DeleteTenantInstance :exec
 DELETE FROM tenant_instances WHERE tenant_id = sqlc.arg(tenant_id);
+
+-- name: UpsertMemoryBankProject :one
+INSERT INTO memory_bank_projects (project_id, owner_subject_sub, owner_tenant_id, service_id, project_key, display_name, root_path, metadata, archived_at)
+VALUES (sqlc.arg(project_id), sqlc.arg(owner_subject_sub), sqlc.arg(owner_tenant_id), sqlc.arg(service_id), sqlc.arg(project_key), sqlc.arg(display_name), sqlc.arg(root_path), sqlc.arg(metadata), sqlc.narg(archived_at))
+ON CONFLICT(owner_subject_sub, service_id, project_key) DO UPDATE SET
+    owner_tenant_id = excluded.owner_tenant_id,
+    display_name = excluded.display_name,
+    root_path = excluded.root_path,
+    metadata = excluded.metadata,
+    archived_at = COALESCE(excluded.archived_at, memory_bank_projects.archived_at),
+    updated_at = CURRENT_TIMESTAMP
+RETURNING project_id;
+
+-- name: GetMemoryBankProject :one
+SELECT project_id,
+       owner_subject_sub,
+       owner_tenant_id,
+       service_id,
+       project_key,
+       display_name,
+       root_path,
+       metadata,
+       archived_at,
+       created_at,
+       updated_at
+FROM memory_bank_projects
+WHERE project_id = sqlc.arg(project_id);
+
+-- name: GetMemoryBankProjectByOwnerKey :one
+SELECT project_id,
+       owner_subject_sub,
+       owner_tenant_id,
+       service_id,
+       project_key,
+       display_name,
+       root_path,
+       metadata,
+       archived_at,
+       created_at,
+       updated_at
+FROM memory_bank_projects
+WHERE owner_subject_sub = sqlc.arg(owner_subject_sub)
+  AND service_id = sqlc.arg(service_id)
+  AND project_key = sqlc.arg(project_key);
+
+-- name: ListMemoryBankProjectsByOwner :many
+SELECT project_id,
+       owner_subject_sub,
+       owner_tenant_id,
+       service_id,
+       project_key,
+       display_name,
+       root_path,
+       metadata,
+       archived_at,
+       created_at,
+       updated_at
+FROM memory_bank_projects
+WHERE owner_subject_sub = sqlc.arg(owner_subject_sub)
+  AND service_id = sqlc.arg(service_id)
+  AND (sqlc.arg(include_archived) OR archived_at IS NULL)
+ORDER BY project_key;
+
+-- name: InsertMemoryBankProjectShare :execrows
+INSERT INTO memory_bank_project_shares (share_id, project_id, owner_subject_sub, collaborator_subject_sub, permission, state, source, created_by_subject_sub, expires_at, metadata)
+SELECT sqlc.arg(share_id),
+       sqlc.arg(project_id),
+       sqlc.arg(owner_subject_sub),
+       sqlc.arg(collaborator_subject_sub),
+       sqlc.arg(permission),
+       sqlc.arg(state),
+       sqlc.arg(source),
+       sqlc.arg(created_by_subject_sub),
+       sqlc.narg(expires_at),
+       sqlc.arg(metadata)
+FROM memory_bank_projects
+WHERE project_id = sqlc.arg(project_id)
+  AND owner_subject_sub = sqlc.arg(owner_subject_sub)
+  AND archived_at IS NULL;
+
+-- name: ExpireMemoryBankProjectShares :execrows
+UPDATE memory_bank_project_shares
+SET state = 'expired',
+    updated_at = CURRENT_TIMESTAMP
+WHERE state IN ('pending', 'active')
+  AND expires_at IS NOT NULL
+  AND julianday(expires_at) <= julianday(sqlc.arg(now));
+
+-- name: GetMemoryBankProjectShare :one
+SELECT share_id,
+       memory_bank_project_shares.project_id,
+       memory_bank_project_shares.owner_subject_sub,
+       memory_bank_project_shares.collaborator_subject_sub,
+       memory_bank_project_shares.permission,
+       memory_bank_project_shares.state,
+       memory_bank_project_shares.source,
+       memory_bank_project_shares.created_by_subject_sub,
+       memory_bank_project_shares.accepted_at,
+       memory_bank_project_shares.revoked_at,
+       memory_bank_project_shares.expires_at,
+       memory_bank_project_shares.metadata,
+       memory_bank_project_shares.created_at,
+       memory_bank_project_shares.updated_at
+FROM memory_bank_project_shares
+WHERE share_id = sqlc.arg(share_id);
+
+-- name: ListMemoryBankProjectSharesForSubject :many
+SELECT memory_bank_project_shares.share_id,
+       memory_bank_project_shares.project_id,
+       memory_bank_project_shares.owner_subject_sub,
+       memory_bank_project_shares.collaborator_subject_sub,
+       memory_bank_project_shares.permission,
+       memory_bank_project_shares.state,
+       memory_bank_project_shares.source,
+       memory_bank_project_shares.created_by_subject_sub,
+       memory_bank_project_shares.accepted_at,
+       memory_bank_project_shares.revoked_at,
+       memory_bank_project_shares.expires_at,
+       memory_bank_project_shares.metadata,
+       memory_bank_project_shares.created_at,
+       memory_bank_project_shares.updated_at
+FROM memory_bank_project_shares
+JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+WHERE memory_bank_project_shares.collaborator_subject_sub = sqlc.arg(collaborator_subject_sub)
+  AND (sqlc.arg(include_inactive) OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(sqlc.arg(now))) AND memory_bank_projects.archived_at IS NULL))
+ORDER BY memory_bank_project_shares.updated_at DESC;
+
+-- name: ListMemoryBankProjectSharesForSubjectService :many
+SELECT memory_bank_project_shares.share_id,
+       memory_bank_project_shares.project_id,
+       memory_bank_project_shares.owner_subject_sub,
+       memory_bank_project_shares.collaborator_subject_sub,
+       memory_bank_project_shares.permission,
+       memory_bank_project_shares.state,
+       memory_bank_project_shares.source,
+       memory_bank_project_shares.created_by_subject_sub,
+       memory_bank_project_shares.accepted_at,
+       memory_bank_project_shares.revoked_at,
+       memory_bank_project_shares.expires_at,
+       memory_bank_project_shares.metadata,
+       memory_bank_project_shares.created_at,
+       memory_bank_project_shares.updated_at
+FROM memory_bank_project_shares
+JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+WHERE memory_bank_project_shares.collaborator_subject_sub = sqlc.arg(collaborator_subject_sub)
+  AND memory_bank_projects.service_id = sqlc.arg(service_id)
+  AND (sqlc.arg(include_inactive) OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(sqlc.arg(now))) AND memory_bank_projects.archived_at IS NULL))
+ORDER BY memory_bank_project_shares.updated_at DESC;
+
+-- name: ActivateMemoryBankProjectShare :execrows
+UPDATE memory_bank_project_shares
+SET state = 'active',
+    accepted_at = sqlc.arg(accepted_at),
+    updated_at = CURRENT_TIMESTAMP
+WHERE share_id = sqlc.arg(share_id)
+  AND collaborator_subject_sub = sqlc.arg(collaborator_subject_sub)
+  AND state IN ('pending', 'active')
+  AND (expires_at IS NULL OR julianday(expires_at) > julianday(sqlc.arg(accepted_at)))
+  AND EXISTS (
+    SELECT 1
+    FROM memory_bank_projects
+    WHERE memory_bank_projects.project_id = memory_bank_project_shares.project_id
+      AND memory_bank_projects.archived_at IS NULL
+  );
+
+-- name: RevokeMemoryBankProjectShare :execrows
+UPDATE memory_bank_project_shares
+SET state = 'revoked',
+    revoked_at = sqlc.arg(revoked_at),
+    updated_at = CURRENT_TIMESTAMP
+WHERE share_id = sqlc.arg(share_id)
+  AND state <> 'revoked';
+
+-- name: InsertTenantRuntimeSpec :exec
+INSERT INTO tenant_runtime_specs (spec_id, tenant_id, service_id, subject_sub, spec_version, compose_hash, env_contract_hash, secret_contract_hash, image_refs_json, network_policy_json, identity_context_hash, created_at)
+VALUES (sqlc.arg(spec_id), sqlc.arg(tenant_id), sqlc.arg(service_id), sqlc.arg(subject_sub), sqlc.arg(spec_version), sqlc.arg(compose_hash), sqlc.arg(env_contract_hash), sqlc.arg(secret_contract_hash), sqlc.arg(image_refs_json), sqlc.arg(network_policy_json), sqlc.arg(identity_context_hash), sqlc.arg(created_at));
+
+-- name: GetTenantRuntimeSpec :one
+SELECT spec_id,
+       tenant_id,
+       service_id,
+       subject_sub,
+       spec_version,
+       compose_hash,
+       env_contract_hash,
+       secret_contract_hash,
+       image_refs_json,
+       network_policy_json,
+       identity_context_hash,
+       created_at
+FROM tenant_runtime_specs
+WHERE spec_id = sqlc.arg(spec_id);
+
+-- name: ListTenantRuntimeSpecsForTenant :many
+SELECT spec_id,
+       tenant_id,
+       service_id,
+       subject_sub,
+       spec_version,
+       compose_hash,
+       env_contract_hash,
+       secret_contract_hash,
+       image_refs_json,
+       network_policy_json,
+       identity_context_hash,
+       created_at
+FROM tenant_runtime_specs
+WHERE tenant_id = sqlc.arg(tenant_id)
+ORDER BY created_at DESC;
+
+-- name: InsertTenantRuntimeMeasurement :exec
+INSERT INTO tenant_runtime_measurements (measurement_id, tenant_id, coolify_resource_id, container_id, source, image_ref, image_digest, compose_hash, env_contract_hash, network_json, ports_json, volumes_json, health_status, raw_summary_json, measured_at)
+VALUES (sqlc.arg(measurement_id), sqlc.arg(tenant_id), sqlc.narg(coolify_resource_id), sqlc.narg(container_id), sqlc.arg(source), sqlc.narg(image_ref), sqlc.narg(image_digest), sqlc.narg(compose_hash), sqlc.narg(env_contract_hash), sqlc.arg(network_json), sqlc.arg(ports_json), sqlc.arg(volumes_json), sqlc.arg(health_status), sqlc.arg(raw_summary_json), sqlc.arg(measured_at));
+
+-- name: GetTenantRuntimeMeasurement :one
+SELECT measurement_id,
+       tenant_id,
+       coolify_resource_id,
+       container_id,
+       source,
+       image_ref,
+       image_digest,
+       compose_hash,
+       env_contract_hash,
+       network_json,
+       ports_json,
+       volumes_json,
+       health_status,
+       raw_summary_json,
+       measured_at
+FROM tenant_runtime_measurements
+WHERE measurement_id = sqlc.arg(measurement_id);
+
+-- name: ListTenantRuntimeMeasurementsForTenant :many
+SELECT measurement_id,
+       tenant_id,
+       coolify_resource_id,
+       container_id,
+       source,
+       image_ref,
+       image_digest,
+       compose_hash,
+       env_contract_hash,
+       network_json,
+       ports_json,
+       volumes_json,
+       health_status,
+       raw_summary_json,
+       measured_at
+FROM tenant_runtime_measurements
+WHERE tenant_id = sqlc.arg(tenant_id)
+ORDER BY measured_at DESC;
+
+-- name: InsertTenantRuntimeAttestation :exec
+INSERT INTO tenant_runtime_attestations (attestation_id, tenant_id, spec_id, measurement_id, policy_version, verdict, failure_reasons_json, expires_at, created_at)
+VALUES (sqlc.arg(attestation_id), sqlc.arg(tenant_id), sqlc.narg(spec_id), sqlc.narg(measurement_id), sqlc.arg(policy_version), sqlc.arg(verdict), sqlc.arg(failure_reasons_json), sqlc.narg(expires_at), sqlc.arg(created_at));
+
+-- name: GetTenantRuntimeAttestation :one
+SELECT attestation_id,
+       tenant_id,
+       spec_id,
+       measurement_id,
+       policy_version,
+       verdict,
+       failure_reasons_json,
+       expires_at,
+       created_at
+FROM tenant_runtime_attestations
+WHERE attestation_id = sqlc.arg(attestation_id);
+
+-- name: GetLatestTenantRuntimeAttestation :one
+SELECT attestation_id,
+       tenant_id,
+       spec_id,
+       measurement_id,
+       policy_version,
+       verdict,
+       failure_reasons_json,
+       expires_at,
+       created_at
+FROM tenant_runtime_attestations
+WHERE tenant_id = sqlc.arg(tenant_id)
+ORDER BY created_at DESC, rowid DESC
+LIMIT 1;
+
+-- name: MarkTenantRuntimeSpec :exec
+UPDATE tenant_instances
+SET runtime_spec_id = sqlc.arg(spec_id),
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_id = sqlc.arg(tenant_id);
+
+-- name: MarkTenantAttestationSummary :exec
+UPDATE tenant_instances
+SET attestation_state = sqlc.arg(verdict),
+    last_attested_at = sqlc.arg(attested_at),
+    last_attestation_id = sqlc.arg(attestation_id),
+    runtime_spec_id = CASE WHEN sqlc.narg(spec_id) IS NULL THEN runtime_spec_id ELSE sqlc.narg(spec_id) END,
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_id = sqlc.arg(tenant_id);

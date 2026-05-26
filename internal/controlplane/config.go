@@ -34,11 +34,6 @@ type Config struct {
 	InfisicalEnvSlug                 string
 	InfisicalMachineClientID         string
 	InfisicalMachineClientSecretPath string
-	MealieBaseURL                    string
-	ActualServerURL                  string
-	TenantImageMealie                string
-	TenantImageActualBudget          string
-	TenantImageMemory                string
 	TenantImageMode                  string
 }
 
@@ -86,11 +81,6 @@ func LoadConfig() (Config, error) {
 		InfisicalEnvSlug:                 strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneInfisicalEnvSlug)),
 		InfisicalMachineClientID:         strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneInfisicalMachineClientID)),
 		InfisicalMachineClientSecretPath: strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneInfisicalMachineClientSecretPath)),
-		MealieBaseURL:                    strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneMealieBaseURL)),
-		ActualServerURL:                  strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneActualServerURL)),
-		TenantImageMealie:                strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneTenantImageMealie)),
-		TenantImageActualBudget:          strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneTenantImageActualBudget)),
-		TenantImageMemory:                strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneTenantImageMemory)),
 		TenantImageMode:                  strings.TrimSpace(viper.GetString(contracts.EnvControlPlaneTenantImageMode)),
 	}
 
@@ -194,12 +184,6 @@ func (c Config) validateTenantRuntimeConfig() error {
 	if c.CoolifyDestinationUUID == "" {
 		return fmt.Errorf("%s is required when tenant runtime is enabled", contracts.EnvControlPlaneCoolifyDestinationUUID)
 	}
-	if c.MealieBaseURL == "" {
-		return fmt.Errorf("%s is required when tenant runtime is enabled", contracts.EnvControlPlaneMealieBaseURL)
-	}
-	if c.ActualServerURL == "" {
-		return fmt.Errorf("%s is required when tenant runtime is enabled", contracts.EnvControlPlaneActualServerURL)
-	}
 	imageMode := strings.ToLower(strings.TrimSpace(c.TenantImageMode))
 	if imageMode == "" {
 		imageMode = "local"
@@ -207,24 +191,6 @@ func (c Config) validateTenantRuntimeConfig() error {
 	if imageMode != "local" && imageMode != "pinned" {
 		return fmt.Errorf("%s must be one of: local, pinned", contracts.EnvControlPlaneTenantImageMode)
 	}
-	if imageMode == "pinned" {
-		for _, image := range []struct {
-			envKey string
-			value  string
-		}{
-			{envKey: contracts.EnvControlPlaneTenantImageMealie, value: c.TenantImageMealie},
-			{envKey: contracts.EnvControlPlaneTenantImageActualBudget, value: c.TenantImageActualBudget},
-			{envKey: contracts.EnvControlPlaneTenantImageMemory, value: c.TenantImageMemory},
-		} {
-			if image.value == "" {
-				return fmt.Errorf("%s is required when %s=pinned", image.envKey, contracts.EnvControlPlaneTenantImageMode)
-			}
-			if !hasImmutableImageDigest(image.value) {
-				return fmt.Errorf("%s must use an immutable digest when %s=pinned", image.envKey, contracts.EnvControlPlaneTenantImageMode)
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -278,9 +244,7 @@ func (c Config) HasTenantRuntimeConfig() bool {
 	return c.CoolifyProjectUUID != "" &&
 		(c.CoolifyEnvironmentName != "" || c.CoolifyEnvironmentUUID != "") &&
 		c.CoolifyServerUUID != "" &&
-		c.CoolifyDestinationUUID != "" &&
-		c.MealieBaseURL != "" &&
-		c.ActualServerURL != ""
+		c.CoolifyDestinationUUID != ""
 }
 
 func parseDurationEnv(envKey string) (time.Duration, error) {

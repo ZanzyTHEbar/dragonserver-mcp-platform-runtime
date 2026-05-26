@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,19 +18,15 @@ import (
 )
 
 const (
-	defaultTenantImageActualBudget = "actual-mcp-server:latest"
-	defaultTenantImageMemory       = "mcp-memory-libsql-go:latest"
-	defaultTenantImageMealie       = "mealie-mcp:latest"
-	tenantComposeNetworkAlias      = "mcp_tenant_network"
-	deleteRequeueInterval          = 2 * time.Minute
-	runtimeModeStaticUpstream      = "static_upstream"
+	deleteRequeueInterval     = 2 * time.Minute
+	runtimeModeStaticUpstream = "static_upstream"
 )
 
 type CoolifyTenantRuntime struct {
 	cfg           Config
 	store         *Store
-	coolify       *CoolifyClient
-	secrets       *InfisicalClient
+	coolify       CoolifyProvider
+	secrets       SecretResolver
 	logger        zerolog.Logger
 	healthClient  *http.Client
 	serviceByID   map[string]catalog.ServiceCatalogEntry
@@ -69,12 +67,8 @@ func NewCoolifyTenantRuntime(cfg Config, store *Store, clients *DependencyClient
 		healthClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
-		serviceByID: serviceByID,
-		templatesByID: map[string]tenantTemplate{
-			"mealie":       staticTenantTemplate{render: renderMealieTenant},
-			"actualbudget": staticTenantTemplate{render: renderActualBudgetTenant},
-			"memory":       staticTenantTemplate{render: renderMemoryTenant},
-		},
+		serviceByID:   serviceByID,
+		templatesByID: map[string]tenantTemplate{},
 	}
 }
 
@@ -397,6 +391,9 @@ func (r *CoolifyTenantRuntime) observe(ctx context.Context, tenant TenantInstanc
 func (r *CoolifyTenantRuntime) observeWithURL(ctx context.Context, tenant TenantInstance, service catalog.ServiceCatalogEntry, serviceUUID string, upstreamURL string) (RuntimeApplyResult, error) {
 	healthy, statusDetail, err := r.probeTenantHealth(ctx, tenant, service, serviceUUID, upstreamURL)
 	if err != nil {
+		if attestErr := r.recordRuntimeObservation(ctx, tenant, service, serviceUUID, upstreamURL, false, err.Error(), time.Now().UTC()); attestErr != nil {
+			r.logger.Warn().Err(attestErr).Str("tenant_id", tenant.TenantID.String()).Msg("runtime attestation observation failed")
+		}
 		if updateErr := r.store.UpdateTenantRuntimeStatus(ctx, TenantRuntimeUpdate{
 			TenantID:          tenant.TenantID,
 			RuntimeState:      domain.TenantRuntimeStateDegraded,
@@ -418,6 +415,9 @@ func (r *CoolifyTenantRuntime) observeWithURL(ctx context.Context, tenant Tenant
 
 	now := time.Now().UTC()
 	if healthy {
+		if err := r.recordRuntimeObservation(ctx, tenant, service, serviceUUID, upstreamURL, true, statusDetail, now); err != nil {
+			r.logger.Warn().Err(err).Str("tenant_id", tenant.TenantID.String()).Msg("runtime attestation observation failed")
+		}
 		if err := r.store.UpdateTenantRuntimeStatus(ctx, TenantRuntimeUpdate{
 			TenantID:          tenant.TenantID,
 			RuntimeState:      domain.TenantRuntimeStateReady,
@@ -438,6 +438,9 @@ func (r *CoolifyTenantRuntime) observeWithURL(ctx context.Context, tenant Tenant
 		}, nil
 	}
 
+	if err := r.recordRuntimeObservation(ctx, tenant, service, serviceUUID, upstreamURL, false, statusDetail, now); err != nil {
+		r.logger.Warn().Err(err).Str("tenant_id", tenant.TenantID.String()).Msg("runtime attestation observation failed")
+	}
 	if err := r.store.UpdateTenantRuntimeStatus(ctx, TenantRuntimeUpdate{
 		TenantID:          tenant.TenantID,
 		RuntimeState:      domain.TenantRuntimeStateDegraded,
@@ -508,23 +511,8 @@ func (r *CoolifyTenantRuntime) probeTenantHealth(ctx context.Context, tenant Ten
 	bodyText := strings.TrimSpace(string(bodyBytes))
 	contentType := response.Header.Get("Content-Type")
 
-	switch service.ServiceID {
-	case "actualbudget":
-		if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusBadRequest {
-			return true, "actualbudget responded on /http", nil
-		}
-	case "memory":
-		if response.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-			return true, "memory returned an event stream", nil
-		}
-	case "mealie":
-		if response.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(bodyText), "streamable") {
-			return true, "mealie returned discovery json", nil
-		}
-	default:
-		if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
-			return true, fmt.Sprintf("%s returned healthy status %d", service.ServiceID, response.StatusCode), nil
-		}
+	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		return true, fmt.Sprintf("%s returned healthy status %d", service.ServiceID, response.StatusCode), nil
 	}
 
 	return false, fmt.Sprintf("unexpected health response: status=%d content_type=%s body=%s", response.StatusCode, contentType, bodyText), nil
@@ -581,157 +569,108 @@ func envsDrifted(current []CoolifyEnvVar, expected []CoolifyEnvVar) bool {
 	return false
 }
 
-func renderMealieTenant(cfg Config, tenant TenantInstance, service catalog.ServiceCatalogEntry, secrets map[string]string) (renderedTenantService, error) {
-	mealieBaseURL := strings.TrimSpace(cfg.MealieBaseURL)
-	if mealieBaseURL == "" {
-		return renderedTenantService{}, fmt.Errorf("mealie base url is required for mealie tenant rendering")
+func (r *CoolifyTenantRuntime) recordRuntimeObservation(ctx context.Context, tenant TenantInstance, service catalog.ServiceCatalogEntry, serviceUUID string, upstreamURL string, healthy bool, statusDetail string, observedAt time.Time) error {
+	if r.store == nil || tenant.TenantID.IsZero() {
+		return nil
 	}
-
-	image := valueOrDefault(cfg.TenantImageMealie, defaultTenantImageMealie)
-	network := valueOrDefault(cfg.DockerNetwork, "coolify")
-	compose := fmt.Sprintf(`services:
-  %s:
-    image: %s
-    restart: unless-stopped
-    environment:
-      PORT: ${PORT}
-      MEALIE_BASE_URL: ${MEALIE_BASE_URL}
-      BEARER_TOKEN_OAUTH2PASSWORDBEARER: ${BEARER_TOKEN_OAUTH2PASSWORDBEARER}
-    networks:
-      - %s
-networks:
-  %s:
-    external: true
-    name: %s
-`, tenant.TenantInstanceName, image, tenantComposeNetworkAlias, tenantComposeNetworkAlias, network)
-
-	envs := []CoolifyEnvVar{
-		{Key: "PORT", Value: itoa(service.InternalPort)},
-		{Key: "MEALIE_BASE_URL", Value: mealieBaseURL},
-		{Key: "BEARER_TOKEN_OAUTH2PASSWORDBEARER", Value: secrets["api-token"]},
+	if observedAt.IsZero() {
+		observedAt = time.Now().UTC()
 	}
-
-	return renderedTenantService{
-		CreateRequest: buildCreateServiceRequest(cfg, tenant, compose),
-		UpdateRequest: buildUpdateServiceRequest(cfg, tenant, compose),
-		EnvVars:       envs,
-		UpstreamURL:   buildUpstreamURL(tenant, service),
-	}, nil
+	imageRef := tenantImageForService(service)
+	imageRefsJSON, err := json.Marshal([]string{imageRef})
+	if err != nil {
+		return fmt.Errorf("marshal runtime image refs: %w", err)
+	}
+	networkPolicy := map[string]string{
+		"network":      r.cfg.DockerNetwork,
+		"upstream_url": upstreamURL,
+	}
+	networkPolicyJSON, err := json.Marshal(networkPolicy)
+	if err != nil {
+		return fmt.Errorf("marshal runtime network policy: %w", err)
+	}
+	secretContractJSON, err := json.Marshal(service.SecretContract)
+	if err != nil {
+		return fmt.Errorf("marshal runtime secret contract: %w", err)
+	}
+	identityContextJSON, err := json.Marshal(service.IdentityContext.Normalized())
+	if err != nil {
+		return fmt.Errorf("marshal runtime identity context: %w", err)
+	}
+	composeHash := sha256String(service.ServiceID, service.InternalUpstreamPath, service.HealthPath, upstreamURL)
+	envContractHash := sha256String(string(secretContractJSON), itoa(service.InternalPort), service.HealthPath, service.InternalUpstreamPath)
+	secretContractHash := sha256String(string(secretContractJSON))
+	identityContextHash := sha256String(string(identityContextJSON))
+	healthStatus := "unhealthy"
+	verdict := "warning"
+	failureReasons := []string{statusDetail}
+	if healthy {
+		healthStatus = "healthy"
+		verdict = "trusted"
+		failureReasons = []string{}
+	}
+	rawSummaryJSON, err := json.Marshal(map[string]any{
+		"status_detail": statusDetail,
+		"upstream_url":  upstreamURL,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal runtime measurement summary: %w", err)
+	}
+	source := "http_probe"
+	if tenantRuntimeMode(tenant) == runtimeModeStaticUpstream || serviceUUID == "" {
+		source = "static_upstream"
+	}
+	failureReasonsJSON, err := json.Marshal(failureReasons)
+	if err != nil {
+		return fmt.Errorf("marshal runtime attestation failures: %w", err)
+	}
+	expiresAt := observedAt.Add(15 * time.Minute)
+	return r.store.RecordTenantRuntimeObservation(ctx, TenantRuntimeObservation{
+		Spec: TenantRuntimeSpec{
+			TenantID:            tenant.TenantID,
+			SpecVersion:         "observe-v1",
+			ComposeHash:         composeHash,
+			EnvContractHash:     envContractHash,
+			SecretContractHash:  secretContractHash,
+			ImageRefsJSON:       imageRefsJSON,
+			NetworkPolicyJSON:   networkPolicyJSON,
+			IdentityContextHash: identityContextHash,
+			CreatedAt:           observedAt,
+		},
+		Measurement: TenantRuntimeMeasurement{
+			TenantID:          tenant.TenantID,
+			CoolifyResourceID: serviceUUID,
+			Source:            source,
+			ImageRef:          imageRef,
+			ComposeHash:       composeHash,
+			EnvContractHash:   envContractHash,
+			NetworkJSON:       networkPolicyJSON,
+			HealthStatus:      healthStatus,
+			RawSummaryJSON:    rawSummaryJSON,
+			MeasuredAt:        observedAt,
+		},
+		Attestation: TenantRuntimeAttestation{
+			TenantID:           tenant.TenantID,
+			PolicyVersion:      "observe-v1",
+			Verdict:            verdict,
+			FailureReasonsJSON: failureReasonsJSON,
+			ExpiresAt:          &expiresAt,
+			CreatedAt:          observedAt,
+		},
+	})
 }
 
-func renderActualBudgetTenant(cfg Config, tenant TenantInstance, service catalog.ServiceCatalogEntry, secrets map[string]string) (renderedTenantService, error) {
-	actualServerURL := strings.TrimSpace(cfg.ActualServerURL)
-	if actualServerURL == "" {
-		return renderedTenantService{}, fmt.Errorf("actual server url is required for actualbudget tenant rendering")
-	}
-
-	image := valueOrDefault(cfg.TenantImageActualBudget, defaultTenantImageActualBudget)
-	network := valueOrDefault(cfg.DockerNetwork, "coolify")
-	compose := fmt.Sprintf(`services:
-  %s:
-    image: %s
-    restart: unless-stopped
-    environment:
-      HOST: ${HOST}
-      MCP_BRIDGE_BIND_HOST: ${MCP_BRIDGE_BIND_HOST}
-      MCP_BRIDGE_PORT: ${MCP_BRIDGE_PORT}
-      MCP_BRIDGE_DATA_DIR: ${MCP_BRIDGE_DATA_DIR}
-      MCP_BRIDGE_LOG_DIR: ${MCP_BRIDGE_LOG_DIR}
-      NODE_ENV: ${NODE_ENV}
-      TZ: ${TZ}
-      ACTUAL_SERVER_URL: ${ACTUAL_SERVER_URL}
-      ACTUAL_PASSWORD: ${ACTUAL_PASSWORD}
-      ACTUAL_BUDGET_SYNC_ID: ${ACTUAL_BUDGET_SYNC_ID}
-      ACTUAL_BUDGET_PASSWORD: ${ACTUAL_BUDGET_PASSWORD}
-    volumes:
-      - mcp_data:/data
-      - mcp_logs:/app/logs
-    networks:
-      - %s
-volumes:
-  mcp_data: {}
-  mcp_logs: {}
-networks:
-  %s:
-    external: true
-    name: %s
-`, tenant.TenantInstanceName, image, tenantComposeNetworkAlias, tenantComposeNetworkAlias, network)
-
-	envs := []CoolifyEnvVar{
-		{Key: "HOST", Value: "0.0.0.0"},
-		{Key: "MCP_BRIDGE_BIND_HOST", Value: "0.0.0.0"},
-		{Key: "MCP_BRIDGE_PORT", Value: itoa(service.InternalPort)},
-		{Key: "MCP_BRIDGE_DATA_DIR", Value: "/data"},
-		{Key: "MCP_BRIDGE_LOG_DIR", Value: "/app/logs"},
-		{Key: "NODE_ENV", Value: "production"},
-		{Key: "TZ", Value: "UTC"},
-		{Key: "ACTUAL_SERVER_URL", Value: actualServerURL},
-		{Key: "ACTUAL_PASSWORD", Value: secrets["actual-api-key"]},
-		{Key: "ACTUAL_BUDGET_SYNC_ID", Value: secrets["budget-sync-id"]},
-	}
-	if value := secrets["actual-budget-encryption-password"]; value != "" {
-		envs = append(envs, CoolifyEnvVar{Key: "ACTUAL_BUDGET_PASSWORD", Value: value})
-	}
-
-	return renderedTenantService{
-		CreateRequest: buildCreateServiceRequest(cfg, tenant, compose),
-		UpdateRequest: buildUpdateServiceRequest(cfg, tenant, compose),
-		EnvVars:       envs,
-		UpstreamURL:   buildUpstreamURL(tenant, service),
-	}, nil
+func tenantImageForService(service catalog.ServiceCatalogEntry) string {
+	return service.UpstreamServiceName
 }
 
-func renderMemoryTenant(cfg Config, tenant TenantInstance, service catalog.ServiceCatalogEntry, secrets map[string]string) (renderedTenantService, error) {
-	image := valueOrDefault(cfg.TenantImageMemory, defaultTenantImageMemory)
-	network := valueOrDefault(cfg.DockerNetwork, "coolify")
-	compose := fmt.Sprintf(`services:
-  %s:
-    image: %s
-    restart: unless-stopped
-    environment:
-      PORT: ${PORT}
-      TRANSPORT: ${TRANSPORT}
-      SSE_ENDPOINT: ${SSE_ENDPOINT}
-      MODE: ${MODE}
-      MULTI_PROJECT_AUTH_REQUIRED: ${MULTI_PROJECT_AUTH_REQUIRED}
-      RUN_ONCE: ${RUN_ONCE}
-      PROJECTS_DIR: ${PROJECTS_DIR}
-      METRICS_PORT: ${METRICS_PORT}
-      METRICS_PROMETHEUS: ${METRICS_PROMETHEUS}
-      LIBSQL_URL: ${LIBSQL_URL}
-      LIBSQL_AUTH_TOKEN: ${LIBSQL_AUTH_TOKEN}
-    volumes:
-      - memory_data:/data
-    networks:
-      - %s
-volumes:
-  memory_data: {}
-networks:
-  %s:
-    external: true
-    name: %s
-`, tenant.TenantInstanceName, image, tenantComposeNetworkAlias, tenantComposeNetworkAlias, network)
-
-	envs := []CoolifyEnvVar{
-		{Key: "PORT", Value: itoa(service.InternalPort)},
-		{Key: "TRANSPORT", Value: "sse"},
-		{Key: "SSE_ENDPOINT", Value: "/sse"},
-		{Key: "MODE", Value: "multi"},
-		{Key: "MULTI_PROJECT_AUTH_REQUIRED", Value: "false"},
-		{Key: "RUN_ONCE", Value: "false"},
-		{Key: "PROJECTS_DIR", Value: "/data/projects"},
-		{Key: "METRICS_PORT", Value: "9090"},
-		{Key: "METRICS_PROMETHEUS", Value: "true"},
-		{Key: "LIBSQL_URL", Value: secrets["libsql-url"]},
-		{Key: "LIBSQL_AUTH_TOKEN", Value: secrets["libsql-auth-token"]},
+func sha256String(parts ...string) string {
+	hash := sha256.New()
+	for _, part := range parts {
+		_, _ = hash.Write([]byte(part))
+		_, _ = hash.Write([]byte{0})
 	}
-
-	return renderedTenantService{
-		CreateRequest: buildCreateServiceRequest(cfg, tenant, compose),
-		UpdateRequest: buildUpdateServiceRequest(cfg, tenant, compose),
-		EnvVars:       envs,
-		UpstreamURL:   buildUpstreamURL(tenant, service),
-	}, nil
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func buildCreateServiceRequest(cfg Config, tenant TenantInstance, compose string) CoolifyCreateServiceRequest {
@@ -761,11 +700,4 @@ func buildUpdateServiceRequest(cfg Config, tenant TenantInstance, compose string
 		InstantDeploy:    true,
 		DockerComposeRaw: compose,
 	}
-}
-
-func valueOrDefault(value string, fallback string) string {
-	if strings.TrimSpace(value) != "" {
-		return strings.TrimSpace(value)
-	}
-	return fallback
 }

@@ -17,11 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRewriteProxyPathTranslatesActualBudgetPath(t *testing.T) {
+func TestRewriteProxyPathTranslatesGenericPath(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, "/http", rewriteProxyPath("/actualbudget/mcp", "/actualbudget/mcp", "/http"))
-	require.Equal(t, "/http/tools/list", rewriteProxyPath("/actualbudget/mcp/tools/list", "/actualbudget/mcp", "/http"))
+	require.Equal(t, "/http", rewriteProxyPath("/example-b/mcp", "/example-b/mcp", "/http"))
+	require.Equal(t, "/http/tools/list", rewriteProxyPath("/example-b/mcp/tools/list", "/example-b/mcp", "/http"))
 }
 
 func TestStreamSafeReverseProxyForwardsMCPTransportHeaders(t *testing.T) {
@@ -43,8 +43,8 @@ func TestStreamSafeReverseProxyForwardsMCPTransportHeaders(t *testing.T) {
 	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
 
-	handler := NewStreamSafeReverseProxy(targetURL, "/actualbudget/mcp", "/http", false, zerolog.New(io.Discard))
-	req := httptest.NewRequest(http.MethodPost, "/actualbudget/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","method":"tools/list","id":1}`)))
+	handler := NewStreamSafeReverseProxy(targetURL, "/example-b/mcp", "/http", false, zerolog.New(io.Discard))
+	req := httptest.NewRequest(http.MethodPost, "/example-b/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","method":"tools/list","id":1}`)))
 	req.Header.Set("Authorization", "Bearer local-token")
 	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
 	req.Header.Set("MCP-Session-Id", "session-123")
@@ -77,8 +77,8 @@ func TestStreamSafeReverseProxyReplacesSpoofedIdentityHeaders(t *testing.T) {
 	identityHeaders.Set(subjectHeaderSub, "trusted-sub")
 	identityHeaders.Set(identityHeaderSignature, "trusted-signature")
 
-	handler := NewStreamSafeReverseProxy(targetURL, "/penpot/mcp", "/mcp", false, zerolog.New(io.Discard))
-	req := httptest.NewRequest(http.MethodPost, "/penpot/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","method":"tools/list","id":1}`)))
+	handler := NewStreamSafeReverseProxy(targetURL, "/example-c/mcp", "/mcp", false, zerolog.New(io.Discard))
+	req := httptest.NewRequest(http.MethodPost, "/example-c/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","method":"tools/list","id":1}`)))
 	req.Header.Set("Authorization", "Bearer local-token")
 	req.Header.Set(subjectHeaderSub, "spoofed-sub")
 	req.Header.Set(identityHeaderSignature, "spoofed-signature")
@@ -119,8 +119,8 @@ func TestSSEToStreamableHTTPBridgeDoesNotWaitForNotificationResponse(t *testing.
 	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
 
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
-	req := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader(requestBody))
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
+	req := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader(requestBody))
 	res := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -157,8 +157,8 @@ func TestSSEToStreamableHTTPBridgeSuppressesEntireEndpointEvent(t *testing.T) {
 	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
 
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
-	req := httptest.NewRequest(http.MethodGet, "/memory/mcp", nil)
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
+	req := httptest.NewRequest(http.MethodGet, "/example-d/mcp", nil)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 
@@ -201,13 +201,13 @@ func TestSSEToStreamableHTTPBridgeForwardsPostThroughUpstreamEndpoint(t *testing
 
 	handler := NewSSEToStreamableHTTPBridge(
 		targetURL,
-		"/memory/mcp",
+		"/example-d/mcp",
 		"/sse",
 		false,
 		zerolog.New(io.Discard),
 	)
 
-	req := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader(requestBody))
+	req := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader(requestBody))
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 
@@ -265,16 +265,16 @@ func TestSSEToStreamableHTTPBridgeReusesUpstreamSession(t *testing.T) {
 
 	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
 
-	initReq := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":0,"method":"initialize"}`)))
+	initReq := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":0,"method":"initialize"}`)))
 	initRes := httptest.NewRecorder()
 	handler.ServeHTTP(initRes, initReq)
 	require.Equal(t, http.StatusAccepted, initRes.Code)
 	sessionID := initRes.Header().Get("MCP-Session-Id")
 	require.NotEmpty(t, sessionID)
 
-	toolsReq := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	toolsReq := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	toolsReq.Header.Set("MCP-Session-Id", sessionID)
 	toolsRes := httptest.NewRecorder()
 	handler.ServeHTTP(toolsRes, toolsReq)
@@ -288,9 +288,9 @@ func TestSSEToStreamableHTTPBridgeRejectsBatchRequests(t *testing.T) {
 
 	targetURL, err := url.Parse("http://127.0.0.1:1")
 	require.NoError(t, err)
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
 
-	req := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader([]byte(`[ {"jsonrpc":"2.0","id":1,"method":"tools/list"} ]`)))
+	req := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader([]byte(`[ {"jsonrpc":"2.0","id":1,"method":"tools/list"} ]`)))
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 
@@ -303,9 +303,9 @@ func TestSSEToStreamableHTTPBridgeRejectsUnknownSession(t *testing.T) {
 
 	targetURL, err := url.Parse("http://127.0.0.1:1")
 	require.NoError(t, err)
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
 
-	req := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	req.Header.Set("MCP-Session-Id", "missing-session")
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
@@ -338,21 +338,21 @@ func TestSSEToStreamableHTTPBridgeDeletesSession(t *testing.T) {
 
 	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
 
-	initReq := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","method":"initialize"}`)))
+	initReq := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","method":"initialize"}`)))
 	initRes := httptest.NewRecorder()
 	handler.ServeHTTP(initRes, initReq)
 	sessionID := initRes.Header().Get("MCP-Session-Id")
 	require.NotEmpty(t, sessionID)
 
-	deleteReq := httptest.NewRequest(http.MethodDelete, "/memory/mcp", nil)
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/example-d/mcp", nil)
 	deleteReq.Header.Set("MCP-Session-Id", sessionID)
 	deleteRes := httptest.NewRecorder()
 	handler.ServeHTTP(deleteRes, deleteReq)
 	require.Equal(t, http.StatusNoContent, deleteRes.Code)
 
-	toolsReq := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	toolsReq := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	toolsReq.Header.Set("MCP-Session-Id", sessionID)
 	toolsRes := httptest.NewRecorder()
 	handler.ServeHTTP(toolsRes, toolsReq)
@@ -376,11 +376,11 @@ func TestSSEToStreamableHTTPBridgeTimesOutWaitingForEndpoint(t *testing.T) {
 
 	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))).WithContext(ctx)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 
@@ -412,11 +412,11 @@ func TestSSEToStreamableHTTPBridgeTimesOutWaitingForResponse(t *testing.T) {
 
 	targetURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	handler := NewSSEToStreamableHTTPBridge(targetURL, "/memory/mcp", "/sse", false, zerolog.New(io.Discard))
+	handler := NewSSEToStreamableHTTPBridge(targetURL, "/example-d/mcp", "/sse", false, zerolog.New(io.Discard))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodPost, "/memory/mcp", bytes.NewReader(requestBody)).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodPost, "/example-d/mcp", bytes.NewReader(requestBody)).WithContext(ctx)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 

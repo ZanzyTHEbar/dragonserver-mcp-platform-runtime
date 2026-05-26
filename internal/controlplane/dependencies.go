@@ -7,9 +7,9 @@ import (
 )
 
 type DependencyClients struct {
-	Infisical *InfisicalClient
-	Authentik *AuthentikClient
-	Coolify   *CoolifyClient
+	Infisical SecretResolver
+	Authentik IdentitySyncProvider
+	Coolify   CoolifyProvider
 }
 
 func NewDependencyClients(ctx context.Context, cfg Config, logger zerolog.Logger) (*DependencyClients, error) {

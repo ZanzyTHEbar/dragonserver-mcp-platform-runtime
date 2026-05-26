@@ -23,6 +23,7 @@ import (
 	"dragonserver/mcp-platform/internal/ids"
 	platformsqlite "dragonserver/mcp-platform/internal/platform/sqlite"
 	"dragonserver/mcp-platform/internal/platform/sqlite/platformdb"
+	"dragonserver/mcp-platform/internal/policy"
 
 	oauth2 "github.com/go-oauth2/oauth2/v4"
 	"github.com/go-oauth2/oauth2/v4/models"
@@ -31,10 +32,13 @@ import (
 )
 
 const (
-	tokenSessionIDExtensionKey = "sid"
-	tokenResourceExtensionKey  = "resource"
-	tokenIssuedViaExtensionKey = "issued_via"
-	tokenOperatorReasonKey     = "operator_reason"
+	tokenSessionIDExtensionKey   = "sid"
+	tokenResourceExtensionKey    = "resource"
+	tokenIssuedViaExtensionKey   = "issued_via"
+	tokenOperatorReasonKey       = "operator_reason"
+	tokenAuthorizationDetailsKey = "authorization_details"
+	tokenPolicyBindingIDKey      = "policy_binding_id"
+	tokenShareIDKey              = "share_id"
 
 	oauthSessionIssuedViaOAuth    = "oauth"
 	oauthSessionIssuedViaOperator = "operator"
@@ -153,6 +157,9 @@ type oauthSessionRecord struct {
 	ExpiresAt                   *time.Time
 	IssuedVia                   string
 	OperatorReason              *string
+	AuthorizationDetails        string
+	PolicyBindingID             *string
+	ShareID                     *ids.UUID
 }
 
 type deviceAuthorization struct {
@@ -750,26 +757,7 @@ func redirectURIDomain(values []string) string {
 }
 
 func parseRequestedServiceScopes(scope string) ([]string, bool) {
-	if strings.TrimSpace(scope) == "" {
-		return nil, false
-	}
-	seen := make(map[string]struct{})
-	serviceIDs := make([]string, 0, len(strings.Fields(scope)))
-	for _, scopeEntry := range strings.Fields(scope) {
-		if !strings.HasPrefix(scopeEntry, "mcp:") {
-			return nil, false
-		}
-		serviceID := strings.TrimSpace(strings.TrimPrefix(scopeEntry, "mcp:"))
-		if serviceID == "" {
-			return nil, false
-		}
-		if _, ok := seen[serviceID]; ok {
-			continue
-		}
-		seen[serviceID] = struct{}{}
-		serviceIDs = append(serviceIDs, serviceID)
-	}
-	return serviceIDs, len(serviceIDs) > 0
+	return policy.RequestedServiceScopes(scope)
 }
 
 func singleServiceIDFromScope(scope string) string {
@@ -906,6 +894,38 @@ func tokenInfoOperatorReason(info oauth2.TokenInfo) string {
 	return strings.TrimSpace(ext.GetExtension().Get(tokenOperatorReasonKey))
 }
 
+func tokenInfoAuthorizationDetails(info oauth2.TokenInfo) string {
+	ext, ok := info.(oauth2.ExtendableTokenInfo)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(ext.GetExtension().Get(tokenAuthorizationDetailsKey))
+}
+
+func tokenInfoPolicyBindingID(info oauth2.TokenInfo) string {
+	ext, ok := info.(oauth2.ExtendableTokenInfo)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(ext.GetExtension().Get(tokenPolicyBindingIDKey))
+}
+
+func tokenInfoShareID(info oauth2.TokenInfo) (*ids.UUID, error) {
+	ext, ok := info.(oauth2.ExtendableTokenInfo)
+	if !ok {
+		return nil, nil
+	}
+	value := strings.TrimSpace(ext.GetExtension().Get(tokenShareIDKey))
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := ids.Parse(value)
+	if err != nil {
+		return nil, fmt.Errorf("parse oauth session share id: %w", err)
+	}
+	return &parsed, nil
+}
+
 func setTokenInfoResource(info oauth2.ExtendableTokenInfo, resource string) {
 	resource = strings.TrimRight(strings.TrimSpace(resource), "/")
 	if resource == "" {
@@ -969,6 +989,27 @@ func setTokenInfoOperatorReason(info oauth2.TokenInfo, reason string) {
 		values = make(url.Values)
 	}
 	values.Set(tokenOperatorReasonKey, reason)
+	ext.SetExtension(values)
+}
+
+func setTokenInfoAuthorizationMetadata(info oauth2.TokenInfo, authorizationDetails string, policyBindingID *string, shareID *ids.UUID) {
+	ext, ok := info.(oauth2.ExtendableTokenInfo)
+	if !ok {
+		return
+	}
+	values := ext.GetExtension()
+	if values == nil {
+		values = make(url.Values)
+	}
+	if strings.TrimSpace(authorizationDetails) != "" {
+		values.Set(tokenAuthorizationDetailsKey, strings.TrimSpace(authorizationDetails))
+	}
+	if policyBindingID != nil && strings.TrimSpace(*policyBindingID) != "" {
+		values.Set(tokenPolicyBindingIDKey, strings.TrimSpace(*policyBindingID))
+	}
+	if shareID != nil && !shareID.IsZero() {
+		values.Set(tokenShareIDKey, shareID.String())
+	}
 	ext.SetExtension(values)
 }
 
@@ -1161,6 +1202,15 @@ func (s *sqliteEdgeStateStore) buildUpsertOAuthSessionParams(ctx context.Context
 		issuedVia = oauthSessionIssuedViaOAuth
 	}
 	operatorReason := tokenInfoOperatorReason(info)
+	authorizationDetails, err := normalizeAuthorizationDetailsJSON(tokenInfoAuthorizationDetails(info))
+	if err != nil {
+		return platformdb.UpsertOAuthSessionParams{}, "", err
+	}
+	policyBindingID := tokenInfoPolicyBindingID(info)
+	shareID, err := tokenInfoShareID(info)
+	if err != nil {
+		return platformdb.UpsertOAuthSessionParams{}, "", err
+	}
 	return platformdb.UpsertOAuthSessionParams{
 		SessionID:                   parsedSessionID.Bytes(),
 		SubjectSub:                  info.GetUserID(),
@@ -1186,7 +1236,32 @@ func (s *sqliteEdgeStateStore) buildUpsertOAuthSessionParams(ctx context.Context
 		ExpiresAt:                   sqliteNullTimePtr(expiresAt),
 		IssuedVia:                   issuedVia,
 		OperatorReason:              sql.NullString{String: operatorReason, Valid: operatorReason != ""},
+		AuthorizationDetails:        authorizationDetails,
+		PolicyBindingID:             sql.NullString{String: policyBindingID, Valid: policyBindingID != ""},
+		ShareID:                     nullableUUIDBytes(shareID),
 	}, sessionID, nil
+}
+
+func normalizeAuthorizationDetailsJSON(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "[]", nil
+	}
+	var details []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &details); err != nil {
+		return "", fmt.Errorf("authorization_details must be valid JSON array: %w", err)
+	}
+	if details == nil {
+		return "", fmt.Errorf("authorization_details must be a JSON array")
+	}
+	if len(details) > 0 {
+		return "", fmt.Errorf("authorization_details contains unsupported entries")
+	}
+	normalized, err := json.Marshal(details)
+	if err != nil {
+		return "", fmt.Errorf("normalize authorization_details: %w", err)
+	}
+	return string(normalized), nil
 }
 
 func (s *sqliteEdgeStateStore) CreateDeviceAuthorization(ctx context.Context, record deviceAuthorization) error {
@@ -1717,6 +1792,10 @@ func oauthSessionRecordFromAccessRow(row platformdb.GetOAuthSessionByAccessHashR
 	if err != nil {
 		return oauthSessionRecord{}, fmt.Errorf("parse oauth session id: %w", err)
 	}
+	shareID, err := uuidPtrFromBytes(row.ShareID)
+	if err != nil {
+		return oauthSessionRecord{}, fmt.Errorf("parse oauth session share id: %w", err)
+	}
 	return oauthSessionRecord{
 		SessionID:                   sessionID.String(),
 		SubjectSub:                  stringPtrFromNull(row.SubjectSub),
@@ -1742,7 +1821,28 @@ func oauthSessionRecordFromAccessRow(row platformdb.GetOAuthSessionByAccessHashR
 		ExpiresAt:                   timePtrFromNull(row.ExpiresAt),
 		IssuedVia:                   row.IssuedVia,
 		OperatorReason:              stringPtrFromNull(row.OperatorReason),
+		AuthorizationDetails:        row.AuthorizationDetails,
+		PolicyBindingID:             stringPtrFromNull(row.PolicyBindingID),
+		ShareID:                     shareID,
 	}, nil
+}
+
+func nullableUUIDBytes(value *ids.UUID) []byte {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	return value.Bytes()
+}
+
+func uuidPtrFromBytes(value []byte) (*ids.UUID, error) {
+	if len(value) == 0 {
+		return nil, nil
+	}
+	parsed, err := ids.ParseBytes(value)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func oauthSessionRecordFromCodeRow(row platformdb.ConsumeOAuthSessionByCodeHashRow) (oauthSessionRecord, error) {
@@ -1836,6 +1936,7 @@ func (s *sqliteEdgeStateStore) buildTokenInfo(record oauthSessionRecord, rawCode
 	token.SetScope(record.Scope)
 	setTokenInfoResource(token, record.Resource)
 	setTokenInfoIssuedVia(token, record.IssuedVia)
+	setTokenInfoAuthorizationMetadata(token, record.AuthorizationDetails, record.PolicyBindingID, record.ShareID)
 	if record.CodeChallenge != nil {
 		token.SetCodeChallenge(*record.CodeChallenge)
 	}

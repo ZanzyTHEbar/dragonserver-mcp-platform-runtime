@@ -11,6 +11,53 @@ import (
 	"strings"
 )
 
+const ActivateMemoryBankProjectShare = `-- name: ActivateMemoryBankProjectShare :execrows
+UPDATE memory_bank_project_shares
+SET state = 'active',
+    accepted_at = ?1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE share_id = ?2
+  AND collaborator_subject_sub = ?3
+  AND state IN ('pending', 'active')
+  AND (expires_at IS NULL OR julianday(expires_at) > julianday(?1))
+  AND EXISTS (
+    SELECT 1
+    FROM memory_bank_projects
+    WHERE memory_bank_projects.project_id = memory_bank_project_shares.project_id
+      AND memory_bank_projects.archived_at IS NULL
+  )
+`
+
+type ActivateMemoryBankProjectShareParams struct {
+	AcceptedAt             sql.NullString `db:"accepted_at" json:"accepted_at"`
+	ShareID                []byte         `db:"share_id" json:"share_id"`
+	CollaboratorSubjectSub string         `db:"collaborator_subject_sub" json:"collaborator_subject_sub"`
+}
+
+// ActivateMemoryBankProjectShare
+//
+//	UPDATE memory_bank_project_shares
+//	SET state = 'active',
+//	    accepted_at = ?1,
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE share_id = ?2
+//	  AND collaborator_subject_sub = ?3
+//	  AND state IN ('pending', 'active')
+//	  AND (expires_at IS NULL OR julianday(expires_at) > julianday(?1))
+//	  AND EXISTS (
+//	    SELECT 1
+//	    FROM memory_bank_projects
+//	    WHERE memory_bank_projects.project_id = memory_bank_project_shares.project_id
+//	      AND memory_bank_projects.archived_at IS NULL
+//	  )
+func (q *Queries) ActivateMemoryBankProjectShare(ctx context.Context, arg ActivateMemoryBankProjectShareParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, ActivateMemoryBankProjectShare, arg.AcceptedAt, arg.ShareID, arg.CollaboratorSubjectSub)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const CountSubjectServiceGrant = `-- name: CountSubjectServiceGrant :one
 SELECT COUNT(*)
 FROM service_grants
@@ -219,6 +266,264 @@ func (q *Queries) EnableTenantInstance(ctx context.Context, arg EnableTenantInst
 	return err
 }
 
+const ExpireMemoryBankProjectShares = `-- name: ExpireMemoryBankProjectShares :execrows
+UPDATE memory_bank_project_shares
+SET state = 'expired',
+    updated_at = CURRENT_TIMESTAMP
+WHERE state IN ('pending', 'active')
+  AND expires_at IS NOT NULL
+  AND julianday(expires_at) <= julianday(?1)
+`
+
+type ExpireMemoryBankProjectSharesParams struct {
+	Now interface{} `db:"now" json:"now"`
+}
+
+// ExpireMemoryBankProjectShares
+//
+//	UPDATE memory_bank_project_shares
+//	SET state = 'expired',
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE state IN ('pending', 'active')
+//	  AND expires_at IS NOT NULL
+//	  AND julianday(expires_at) <= julianday(?1)
+func (q *Queries) ExpireMemoryBankProjectShares(ctx context.Context, arg ExpireMemoryBankProjectSharesParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, ExpireMemoryBankProjectShares, arg.Now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const GetLatestTenantRuntimeAttestation = `-- name: GetLatestTenantRuntimeAttestation :one
+SELECT attestation_id,
+       tenant_id,
+       spec_id,
+       measurement_id,
+       policy_version,
+       verdict,
+       failure_reasons_json,
+       expires_at,
+       created_at
+FROM tenant_runtime_attestations
+WHERE tenant_id = ?1
+ORDER BY created_at DESC, rowid DESC
+LIMIT 1
+`
+
+type GetLatestTenantRuntimeAttestationParams struct {
+	TenantID []byte `db:"tenant_id" json:"tenant_id"`
+}
+
+// GetLatestTenantRuntimeAttestation
+//
+//	SELECT attestation_id,
+//	       tenant_id,
+//	       spec_id,
+//	       measurement_id,
+//	       policy_version,
+//	       verdict,
+//	       failure_reasons_json,
+//	       expires_at,
+//	       created_at
+//	FROM tenant_runtime_attestations
+//	WHERE tenant_id = ?1
+//	ORDER BY created_at DESC, rowid DESC
+//	LIMIT 1
+func (q *Queries) GetLatestTenantRuntimeAttestation(ctx context.Context, arg GetLatestTenantRuntimeAttestationParams) (TenantRuntimeAttestation, error) {
+	row := q.db.QueryRowContext(ctx, GetLatestTenantRuntimeAttestation, arg.TenantID)
+	var i TenantRuntimeAttestation
+	err := row.Scan(
+		&i.AttestationID,
+		&i.TenantID,
+		&i.SpecID,
+		&i.MeasurementID,
+		&i.PolicyVersion,
+		&i.Verdict,
+		&i.FailureReasonsJson,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const GetMemoryBankProject = `-- name: GetMemoryBankProject :one
+SELECT project_id,
+       owner_subject_sub,
+       owner_tenant_id,
+       service_id,
+       project_key,
+       display_name,
+       root_path,
+       metadata,
+       archived_at,
+       created_at,
+       updated_at
+FROM memory_bank_projects
+WHERE project_id = ?1
+`
+
+type GetMemoryBankProjectParams struct {
+	ProjectID []byte `db:"project_id" json:"project_id"`
+}
+
+// GetMemoryBankProject
+//
+//	SELECT project_id,
+//	       owner_subject_sub,
+//	       owner_tenant_id,
+//	       service_id,
+//	       project_key,
+//	       display_name,
+//	       root_path,
+//	       metadata,
+//	       archived_at,
+//	       created_at,
+//	       updated_at
+//	FROM memory_bank_projects
+//	WHERE project_id = ?1
+func (q *Queries) GetMemoryBankProject(ctx context.Context, arg GetMemoryBankProjectParams) (MemoryBankProject, error) {
+	row := q.db.QueryRowContext(ctx, GetMemoryBankProject, arg.ProjectID)
+	var i MemoryBankProject
+	err := row.Scan(
+		&i.ProjectID,
+		&i.OwnerSubjectSub,
+		&i.OwnerTenantID,
+		&i.ServiceID,
+		&i.ProjectKey,
+		&i.DisplayName,
+		&i.RootPath,
+		&i.Metadata,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const GetMemoryBankProjectByOwnerKey = `-- name: GetMemoryBankProjectByOwnerKey :one
+SELECT project_id,
+       owner_subject_sub,
+       owner_tenant_id,
+       service_id,
+       project_key,
+       display_name,
+       root_path,
+       metadata,
+       archived_at,
+       created_at,
+       updated_at
+FROM memory_bank_projects
+WHERE owner_subject_sub = ?1
+  AND service_id = ?2
+  AND project_key = ?3
+`
+
+type GetMemoryBankProjectByOwnerKeyParams struct {
+	OwnerSubjectSub string `db:"owner_subject_sub" json:"owner_subject_sub"`
+	ServiceID       string `db:"service_id" json:"service_id"`
+	ProjectKey      string `db:"project_key" json:"project_key"`
+}
+
+// GetMemoryBankProjectByOwnerKey
+//
+//	SELECT project_id,
+//	       owner_subject_sub,
+//	       owner_tenant_id,
+//	       service_id,
+//	       project_key,
+//	       display_name,
+//	       root_path,
+//	       metadata,
+//	       archived_at,
+//	       created_at,
+//	       updated_at
+//	FROM memory_bank_projects
+//	WHERE owner_subject_sub = ?1
+//	  AND service_id = ?2
+//	  AND project_key = ?3
+func (q *Queries) GetMemoryBankProjectByOwnerKey(ctx context.Context, arg GetMemoryBankProjectByOwnerKeyParams) (MemoryBankProject, error) {
+	row := q.db.QueryRowContext(ctx, GetMemoryBankProjectByOwnerKey, arg.OwnerSubjectSub, arg.ServiceID, arg.ProjectKey)
+	var i MemoryBankProject
+	err := row.Scan(
+		&i.ProjectID,
+		&i.OwnerSubjectSub,
+		&i.OwnerTenantID,
+		&i.ServiceID,
+		&i.ProjectKey,
+		&i.DisplayName,
+		&i.RootPath,
+		&i.Metadata,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const GetMemoryBankProjectShare = `-- name: GetMemoryBankProjectShare :one
+SELECT share_id,
+       memory_bank_project_shares.project_id,
+       memory_bank_project_shares.owner_subject_sub,
+       memory_bank_project_shares.collaborator_subject_sub,
+       memory_bank_project_shares.permission,
+       memory_bank_project_shares.state,
+       memory_bank_project_shares.source,
+       memory_bank_project_shares.created_by_subject_sub,
+       memory_bank_project_shares.accepted_at,
+       memory_bank_project_shares.revoked_at,
+       memory_bank_project_shares.expires_at,
+       memory_bank_project_shares.metadata,
+       memory_bank_project_shares.created_at,
+       memory_bank_project_shares.updated_at
+FROM memory_bank_project_shares
+WHERE share_id = ?1
+`
+
+type GetMemoryBankProjectShareParams struct {
+	ShareID []byte `db:"share_id" json:"share_id"`
+}
+
+// GetMemoryBankProjectShare
+//
+//	SELECT share_id,
+//	       memory_bank_project_shares.project_id,
+//	       memory_bank_project_shares.owner_subject_sub,
+//	       memory_bank_project_shares.collaborator_subject_sub,
+//	       memory_bank_project_shares.permission,
+//	       memory_bank_project_shares.state,
+//	       memory_bank_project_shares.source,
+//	       memory_bank_project_shares.created_by_subject_sub,
+//	       memory_bank_project_shares.accepted_at,
+//	       memory_bank_project_shares.revoked_at,
+//	       memory_bank_project_shares.expires_at,
+//	       memory_bank_project_shares.metadata,
+//	       memory_bank_project_shares.created_at,
+//	       memory_bank_project_shares.updated_at
+//	FROM memory_bank_project_shares
+//	WHERE share_id = ?1
+func (q *Queries) GetMemoryBankProjectShare(ctx context.Context, arg GetMemoryBankProjectShareParams) (MemoryBankProjectShare, error) {
+	row := q.db.QueryRowContext(ctx, GetMemoryBankProjectShare, arg.ShareID)
+	var i MemoryBankProjectShare
+	err := row.Scan(
+		&i.ShareID,
+		&i.ProjectID,
+		&i.OwnerSubjectSub,
+		&i.CollaboratorSubjectSub,
+		&i.Permission,
+		&i.State,
+		&i.Source,
+		&i.CreatedBySubjectSub,
+		&i.AcceptedAt,
+		&i.RevokedAt,
+		&i.ExpiresAt,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const GetSubject = `-- name: GetSubject :one
 SELECT subject_sub,
        subject_key,
@@ -271,6 +576,406 @@ func (q *Queries) GetSubject(ctx context.Context, arg GetSubjectParams) (GetSubj
 	return i, err
 }
 
+const GetTenantInstance = `-- name: GetTenantInstance :one
+SELECT tenant_id,
+       subject_sub,
+       service_id,
+       subject_key,
+       tenant_instance_name,
+       internal_dns_name,
+       desired_state,
+       runtime_state,
+       coolify_resource_id,
+       coolify_application_id,
+       upstream_url,
+       secret_version,
+       last_healthy_at,
+       last_reconciled_at,
+       last_error,
+       metadata,
+       attestation_state,
+       last_attested_at,
+       last_attestation_id,
+       runtime_spec_id,
+       created_at,
+       updated_at
+FROM tenant_instances
+WHERE tenant_id = ?1
+`
+
+type GetTenantInstanceParams struct {
+	TenantID []byte `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetTenantInstanceRow struct {
+	TenantID             []byte         `db:"tenant_id" json:"tenant_id"`
+	SubjectSub           string         `db:"subject_sub" json:"subject_sub"`
+	ServiceID            string         `db:"service_id" json:"service_id"`
+	SubjectKey           string         `db:"subject_key" json:"subject_key"`
+	TenantInstanceName   string         `db:"tenant_instance_name" json:"tenant_instance_name"`
+	InternalDnsName      string         `db:"internal_dns_name" json:"internal_dns_name"`
+	DesiredState         string         `db:"desired_state" json:"desired_state"`
+	RuntimeState         string         `db:"runtime_state" json:"runtime_state"`
+	CoolifyResourceID    sql.NullString `db:"coolify_resource_id" json:"coolify_resource_id"`
+	CoolifyApplicationID sql.NullString `db:"coolify_application_id" json:"coolify_application_id"`
+	UpstreamUrl          sql.NullString `db:"upstream_url" json:"upstream_url"`
+	SecretVersion        sql.NullString `db:"secret_version" json:"secret_version"`
+	LastHealthyAt        sql.NullString `db:"last_healthy_at" json:"last_healthy_at"`
+	LastReconciledAt     sql.NullString `db:"last_reconciled_at" json:"last_reconciled_at"`
+	LastError            sql.NullString `db:"last_error" json:"last_error"`
+	Metadata             string         `db:"metadata" json:"metadata"`
+	AttestationState     string         `db:"attestation_state" json:"attestation_state"`
+	LastAttestedAt       sql.NullString `db:"last_attested_at" json:"last_attested_at"`
+	LastAttestationID    []byte         `db:"last_attestation_id" json:"last_attestation_id"`
+	RuntimeSpecID        []byte         `db:"runtime_spec_id" json:"runtime_spec_id"`
+	CreatedAt            string         `db:"created_at" json:"created_at"`
+	UpdatedAt            string         `db:"updated_at" json:"updated_at"`
+}
+
+// GetTenantInstance
+//
+//	SELECT tenant_id,
+//	       subject_sub,
+//	       service_id,
+//	       subject_key,
+//	       tenant_instance_name,
+//	       internal_dns_name,
+//	       desired_state,
+//	       runtime_state,
+//	       coolify_resource_id,
+//	       coolify_application_id,
+//	       upstream_url,
+//	       secret_version,
+//	       last_healthy_at,
+//	       last_reconciled_at,
+//	       last_error,
+//	       metadata,
+//	       attestation_state,
+//	       last_attested_at,
+//	       last_attestation_id,
+//	       runtime_spec_id,
+//	       created_at,
+//	       updated_at
+//	FROM tenant_instances
+//	WHERE tenant_id = ?1
+func (q *Queries) GetTenantInstance(ctx context.Context, arg GetTenantInstanceParams) (GetTenantInstanceRow, error) {
+	row := q.db.QueryRowContext(ctx, GetTenantInstance, arg.TenantID)
+	var i GetTenantInstanceRow
+	err := row.Scan(
+		&i.TenantID,
+		&i.SubjectSub,
+		&i.ServiceID,
+		&i.SubjectKey,
+		&i.TenantInstanceName,
+		&i.InternalDnsName,
+		&i.DesiredState,
+		&i.RuntimeState,
+		&i.CoolifyResourceID,
+		&i.CoolifyApplicationID,
+		&i.UpstreamUrl,
+		&i.SecretVersion,
+		&i.LastHealthyAt,
+		&i.LastReconciledAt,
+		&i.LastError,
+		&i.Metadata,
+		&i.AttestationState,
+		&i.LastAttestedAt,
+		&i.LastAttestationID,
+		&i.RuntimeSpecID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const GetTenantInstanceBySubjectService = `-- name: GetTenantInstanceBySubjectService :one
+SELECT tenant_id,
+       subject_sub,
+       service_id,
+       subject_key,
+       tenant_instance_name,
+       internal_dns_name,
+       desired_state,
+       runtime_state,
+       coolify_resource_id,
+       coolify_application_id,
+       upstream_url,
+       secret_version,
+       last_healthy_at,
+       last_reconciled_at,
+       last_error,
+       metadata,
+       attestation_state,
+       last_attested_at,
+       last_attestation_id,
+       runtime_spec_id,
+       created_at,
+       updated_at
+FROM tenant_instances
+WHERE subject_sub = ?1
+  AND service_id = ?2
+  AND desired_state <> 'deleted'
+`
+
+type GetTenantInstanceBySubjectServiceParams struct {
+	SubjectSub string `db:"subject_sub" json:"subject_sub"`
+	ServiceID  string `db:"service_id" json:"service_id"`
+}
+
+type GetTenantInstanceBySubjectServiceRow struct {
+	TenantID             []byte         `db:"tenant_id" json:"tenant_id"`
+	SubjectSub           string         `db:"subject_sub" json:"subject_sub"`
+	ServiceID            string         `db:"service_id" json:"service_id"`
+	SubjectKey           string         `db:"subject_key" json:"subject_key"`
+	TenantInstanceName   string         `db:"tenant_instance_name" json:"tenant_instance_name"`
+	InternalDnsName      string         `db:"internal_dns_name" json:"internal_dns_name"`
+	DesiredState         string         `db:"desired_state" json:"desired_state"`
+	RuntimeState         string         `db:"runtime_state" json:"runtime_state"`
+	CoolifyResourceID    sql.NullString `db:"coolify_resource_id" json:"coolify_resource_id"`
+	CoolifyApplicationID sql.NullString `db:"coolify_application_id" json:"coolify_application_id"`
+	UpstreamUrl          sql.NullString `db:"upstream_url" json:"upstream_url"`
+	SecretVersion        sql.NullString `db:"secret_version" json:"secret_version"`
+	LastHealthyAt        sql.NullString `db:"last_healthy_at" json:"last_healthy_at"`
+	LastReconciledAt     sql.NullString `db:"last_reconciled_at" json:"last_reconciled_at"`
+	LastError            sql.NullString `db:"last_error" json:"last_error"`
+	Metadata             string         `db:"metadata" json:"metadata"`
+	AttestationState     string         `db:"attestation_state" json:"attestation_state"`
+	LastAttestedAt       sql.NullString `db:"last_attested_at" json:"last_attested_at"`
+	LastAttestationID    []byte         `db:"last_attestation_id" json:"last_attestation_id"`
+	RuntimeSpecID        []byte         `db:"runtime_spec_id" json:"runtime_spec_id"`
+	CreatedAt            string         `db:"created_at" json:"created_at"`
+	UpdatedAt            string         `db:"updated_at" json:"updated_at"`
+}
+
+// GetTenantInstanceBySubjectService
+//
+//	SELECT tenant_id,
+//	       subject_sub,
+//	       service_id,
+//	       subject_key,
+//	       tenant_instance_name,
+//	       internal_dns_name,
+//	       desired_state,
+//	       runtime_state,
+//	       coolify_resource_id,
+//	       coolify_application_id,
+//	       upstream_url,
+//	       secret_version,
+//	       last_healthy_at,
+//	       last_reconciled_at,
+//	       last_error,
+//	       metadata,
+//	       attestation_state,
+//	       last_attested_at,
+//	       last_attestation_id,
+//	       runtime_spec_id,
+//	       created_at,
+//	       updated_at
+//	FROM tenant_instances
+//	WHERE subject_sub = ?1
+//	  AND service_id = ?2
+//	  AND desired_state <> 'deleted'
+func (q *Queries) GetTenantInstanceBySubjectService(ctx context.Context, arg GetTenantInstanceBySubjectServiceParams) (GetTenantInstanceBySubjectServiceRow, error) {
+	row := q.db.QueryRowContext(ctx, GetTenantInstanceBySubjectService, arg.SubjectSub, arg.ServiceID)
+	var i GetTenantInstanceBySubjectServiceRow
+	err := row.Scan(
+		&i.TenantID,
+		&i.SubjectSub,
+		&i.ServiceID,
+		&i.SubjectKey,
+		&i.TenantInstanceName,
+		&i.InternalDnsName,
+		&i.DesiredState,
+		&i.RuntimeState,
+		&i.CoolifyResourceID,
+		&i.CoolifyApplicationID,
+		&i.UpstreamUrl,
+		&i.SecretVersion,
+		&i.LastHealthyAt,
+		&i.LastReconciledAt,
+		&i.LastError,
+		&i.Metadata,
+		&i.AttestationState,
+		&i.LastAttestedAt,
+		&i.LastAttestationID,
+		&i.RuntimeSpecID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const GetTenantRuntimeAttestation = `-- name: GetTenantRuntimeAttestation :one
+SELECT attestation_id,
+       tenant_id,
+       spec_id,
+       measurement_id,
+       policy_version,
+       verdict,
+       failure_reasons_json,
+       expires_at,
+       created_at
+FROM tenant_runtime_attestations
+WHERE attestation_id = ?1
+`
+
+type GetTenantRuntimeAttestationParams struct {
+	AttestationID []byte `db:"attestation_id" json:"attestation_id"`
+}
+
+// GetTenantRuntimeAttestation
+//
+//	SELECT attestation_id,
+//	       tenant_id,
+//	       spec_id,
+//	       measurement_id,
+//	       policy_version,
+//	       verdict,
+//	       failure_reasons_json,
+//	       expires_at,
+//	       created_at
+//	FROM tenant_runtime_attestations
+//	WHERE attestation_id = ?1
+func (q *Queries) GetTenantRuntimeAttestation(ctx context.Context, arg GetTenantRuntimeAttestationParams) (TenantRuntimeAttestation, error) {
+	row := q.db.QueryRowContext(ctx, GetTenantRuntimeAttestation, arg.AttestationID)
+	var i TenantRuntimeAttestation
+	err := row.Scan(
+		&i.AttestationID,
+		&i.TenantID,
+		&i.SpecID,
+		&i.MeasurementID,
+		&i.PolicyVersion,
+		&i.Verdict,
+		&i.FailureReasonsJson,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const GetTenantRuntimeMeasurement = `-- name: GetTenantRuntimeMeasurement :one
+SELECT measurement_id,
+       tenant_id,
+       coolify_resource_id,
+       container_id,
+       source,
+       image_ref,
+       image_digest,
+       compose_hash,
+       env_contract_hash,
+       network_json,
+       ports_json,
+       volumes_json,
+       health_status,
+       raw_summary_json,
+       measured_at
+FROM tenant_runtime_measurements
+WHERE measurement_id = ?1
+`
+
+type GetTenantRuntimeMeasurementParams struct {
+	MeasurementID []byte `db:"measurement_id" json:"measurement_id"`
+}
+
+// GetTenantRuntimeMeasurement
+//
+//	SELECT measurement_id,
+//	       tenant_id,
+//	       coolify_resource_id,
+//	       container_id,
+//	       source,
+//	       image_ref,
+//	       image_digest,
+//	       compose_hash,
+//	       env_contract_hash,
+//	       network_json,
+//	       ports_json,
+//	       volumes_json,
+//	       health_status,
+//	       raw_summary_json,
+//	       measured_at
+//	FROM tenant_runtime_measurements
+//	WHERE measurement_id = ?1
+func (q *Queries) GetTenantRuntimeMeasurement(ctx context.Context, arg GetTenantRuntimeMeasurementParams) (TenantRuntimeMeasurement, error) {
+	row := q.db.QueryRowContext(ctx, GetTenantRuntimeMeasurement, arg.MeasurementID)
+	var i TenantRuntimeMeasurement
+	err := row.Scan(
+		&i.MeasurementID,
+		&i.TenantID,
+		&i.CoolifyResourceID,
+		&i.ContainerID,
+		&i.Source,
+		&i.ImageRef,
+		&i.ImageDigest,
+		&i.ComposeHash,
+		&i.EnvContractHash,
+		&i.NetworkJson,
+		&i.PortsJson,
+		&i.VolumesJson,
+		&i.HealthStatus,
+		&i.RawSummaryJson,
+		&i.MeasuredAt,
+	)
+	return i, err
+}
+
+const GetTenantRuntimeSpec = `-- name: GetTenantRuntimeSpec :one
+SELECT spec_id,
+       tenant_id,
+       service_id,
+       subject_sub,
+       spec_version,
+       compose_hash,
+       env_contract_hash,
+       secret_contract_hash,
+       image_refs_json,
+       network_policy_json,
+       identity_context_hash,
+       created_at
+FROM tenant_runtime_specs
+WHERE spec_id = ?1
+`
+
+type GetTenantRuntimeSpecParams struct {
+	SpecID []byte `db:"spec_id" json:"spec_id"`
+}
+
+// GetTenantRuntimeSpec
+//
+//	SELECT spec_id,
+//	       tenant_id,
+//	       service_id,
+//	       subject_sub,
+//	       spec_version,
+//	       compose_hash,
+//	       env_contract_hash,
+//	       secret_contract_hash,
+//	       image_refs_json,
+//	       network_policy_json,
+//	       identity_context_hash,
+//	       created_at
+//	FROM tenant_runtime_specs
+//	WHERE spec_id = ?1
+func (q *Queries) GetTenantRuntimeSpec(ctx context.Context, arg GetTenantRuntimeSpecParams) (TenantRuntimeSpec, error) {
+	row := q.db.QueryRowContext(ctx, GetTenantRuntimeSpec, arg.SpecID)
+	var i TenantRuntimeSpec
+	err := row.Scan(
+		&i.SpecID,
+		&i.TenantID,
+		&i.ServiceID,
+		&i.SubjectSub,
+		&i.SpecVersion,
+		&i.ComposeHash,
+		&i.EnvContractHash,
+		&i.SecretContractHash,
+		&i.ImageRefsJson,
+		&i.NetworkPolicyJson,
+		&i.IdentityContextHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const InsertEffectiveServiceGrantsFromSources = `-- name: InsertEffectiveServiceGrantsFromSources :exec
 INSERT INTO service_grants (subject_sub, service_id, source_group, granted_at, last_synced_at)
 SELECT subject_sub,
@@ -295,6 +1000,73 @@ GROUP BY subject_sub, service_id
 func (q *Queries) InsertEffectiveServiceGrantsFromSources(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, InsertEffectiveServiceGrantsFromSources)
 	return err
+}
+
+const InsertMemoryBankProjectShare = `-- name: InsertMemoryBankProjectShare :execrows
+INSERT INTO memory_bank_project_shares (share_id, project_id, owner_subject_sub, collaborator_subject_sub, permission, state, source, created_by_subject_sub, expires_at, metadata)
+SELECT ?1,
+       ?2,
+       ?3,
+       ?4,
+       ?5,
+       ?6,
+       ?7,
+       ?8,
+       ?9,
+       ?10
+FROM memory_bank_projects
+WHERE project_id = ?2
+  AND owner_subject_sub = ?3
+  AND archived_at IS NULL
+`
+
+type InsertMemoryBankProjectShareParams struct {
+	ShareID                []byte         `db:"share_id" json:"share_id"`
+	ProjectID              []byte         `db:"project_id" json:"project_id"`
+	OwnerSubjectSub        string         `db:"owner_subject_sub" json:"owner_subject_sub"`
+	CollaboratorSubjectSub string         `db:"collaborator_subject_sub" json:"collaborator_subject_sub"`
+	Permission             string         `db:"permission" json:"permission"`
+	State                  string         `db:"state" json:"state"`
+	Source                 string         `db:"source" json:"source"`
+	CreatedBySubjectSub    string         `db:"created_by_subject_sub" json:"created_by_subject_sub"`
+	ExpiresAt              sql.NullString `db:"expires_at" json:"expires_at"`
+	Metadata               string         `db:"metadata" json:"metadata"`
+}
+
+// InsertMemoryBankProjectShare
+//
+//	INSERT INTO memory_bank_project_shares (share_id, project_id, owner_subject_sub, collaborator_subject_sub, permission, state, source, created_by_subject_sub, expires_at, metadata)
+//	SELECT ?1,
+//	       ?2,
+//	       ?3,
+//	       ?4,
+//	       ?5,
+//	       ?6,
+//	       ?7,
+//	       ?8,
+//	       ?9,
+//	       ?10
+//	FROM memory_bank_projects
+//	WHERE project_id = ?2
+//	  AND owner_subject_sub = ?3
+//	  AND archived_at IS NULL
+func (q *Queries) InsertMemoryBankProjectShare(ctx context.Context, arg InsertMemoryBankProjectShareParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, InsertMemoryBankProjectShare,
+		arg.ShareID,
+		arg.ProjectID,
+		arg.OwnerSubjectSub,
+		arg.CollaboratorSubjectSub,
+		arg.Permission,
+		arg.State,
+		arg.Source,
+		arg.CreatedBySubjectSub,
+		arg.ExpiresAt,
+		arg.Metadata,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const InsertReconcileRun = `-- name: InsertReconcileRun :exec
@@ -401,6 +1173,132 @@ func (q *Queries) InsertTenantInstance(ctx context.Context, arg InsertTenantInst
 	return err
 }
 
+const InsertTenantRuntimeAttestation = `-- name: InsertTenantRuntimeAttestation :exec
+INSERT INTO tenant_runtime_attestations (attestation_id, tenant_id, spec_id, measurement_id, policy_version, verdict, failure_reasons_json, expires_at, created_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+`
+
+type InsertTenantRuntimeAttestationParams struct {
+	AttestationID      []byte         `db:"attestation_id" json:"attestation_id"`
+	TenantID           []byte         `db:"tenant_id" json:"tenant_id"`
+	SpecID             []byte         `db:"spec_id" json:"spec_id"`
+	MeasurementID      []byte         `db:"measurement_id" json:"measurement_id"`
+	PolicyVersion      string         `db:"policy_version" json:"policy_version"`
+	Verdict            string         `db:"verdict" json:"verdict"`
+	FailureReasonsJson string         `db:"failure_reasons_json" json:"failure_reasons_json"`
+	ExpiresAt          sql.NullString `db:"expires_at" json:"expires_at"`
+	CreatedAt          string         `db:"created_at" json:"created_at"`
+}
+
+// InsertTenantRuntimeAttestation
+//
+//	INSERT INTO tenant_runtime_attestations (attestation_id, tenant_id, spec_id, measurement_id, policy_version, verdict, failure_reasons_json, expires_at, created_at)
+//	VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+func (q *Queries) InsertTenantRuntimeAttestation(ctx context.Context, arg InsertTenantRuntimeAttestationParams) error {
+	_, err := q.db.ExecContext(ctx, InsertTenantRuntimeAttestation,
+		arg.AttestationID,
+		arg.TenantID,
+		arg.SpecID,
+		arg.MeasurementID,
+		arg.PolicyVersion,
+		arg.Verdict,
+		arg.FailureReasonsJson,
+		arg.ExpiresAt,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const InsertTenantRuntimeMeasurement = `-- name: InsertTenantRuntimeMeasurement :exec
+INSERT INTO tenant_runtime_measurements (measurement_id, tenant_id, coolify_resource_id, container_id, source, image_ref, image_digest, compose_hash, env_contract_hash, network_json, ports_json, volumes_json, health_status, raw_summary_json, measured_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+`
+
+type InsertTenantRuntimeMeasurementParams struct {
+	MeasurementID     []byte         `db:"measurement_id" json:"measurement_id"`
+	TenantID          []byte         `db:"tenant_id" json:"tenant_id"`
+	CoolifyResourceID sql.NullString `db:"coolify_resource_id" json:"coolify_resource_id"`
+	ContainerID       sql.NullString `db:"container_id" json:"container_id"`
+	Source            string         `db:"source" json:"source"`
+	ImageRef          sql.NullString `db:"image_ref" json:"image_ref"`
+	ImageDigest       sql.NullString `db:"image_digest" json:"image_digest"`
+	ComposeHash       sql.NullString `db:"compose_hash" json:"compose_hash"`
+	EnvContractHash   sql.NullString `db:"env_contract_hash" json:"env_contract_hash"`
+	NetworkJson       string         `db:"network_json" json:"network_json"`
+	PortsJson         string         `db:"ports_json" json:"ports_json"`
+	VolumesJson       string         `db:"volumes_json" json:"volumes_json"`
+	HealthStatus      string         `db:"health_status" json:"health_status"`
+	RawSummaryJson    string         `db:"raw_summary_json" json:"raw_summary_json"`
+	MeasuredAt        string         `db:"measured_at" json:"measured_at"`
+}
+
+// InsertTenantRuntimeMeasurement
+//
+//	INSERT INTO tenant_runtime_measurements (measurement_id, tenant_id, coolify_resource_id, container_id, source, image_ref, image_digest, compose_hash, env_contract_hash, network_json, ports_json, volumes_json, health_status, raw_summary_json, measured_at)
+//	VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+func (q *Queries) InsertTenantRuntimeMeasurement(ctx context.Context, arg InsertTenantRuntimeMeasurementParams) error {
+	_, err := q.db.ExecContext(ctx, InsertTenantRuntimeMeasurement,
+		arg.MeasurementID,
+		arg.TenantID,
+		arg.CoolifyResourceID,
+		arg.ContainerID,
+		arg.Source,
+		arg.ImageRef,
+		arg.ImageDigest,
+		arg.ComposeHash,
+		arg.EnvContractHash,
+		arg.NetworkJson,
+		arg.PortsJson,
+		arg.VolumesJson,
+		arg.HealthStatus,
+		arg.RawSummaryJson,
+		arg.MeasuredAt,
+	)
+	return err
+}
+
+const InsertTenantRuntimeSpec = `-- name: InsertTenantRuntimeSpec :exec
+INSERT INTO tenant_runtime_specs (spec_id, tenant_id, service_id, subject_sub, spec_version, compose_hash, env_contract_hash, secret_contract_hash, image_refs_json, network_policy_json, identity_context_hash, created_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+`
+
+type InsertTenantRuntimeSpecParams struct {
+	SpecID              []byte `db:"spec_id" json:"spec_id"`
+	TenantID            []byte `db:"tenant_id" json:"tenant_id"`
+	ServiceID           string `db:"service_id" json:"service_id"`
+	SubjectSub          string `db:"subject_sub" json:"subject_sub"`
+	SpecVersion         string `db:"spec_version" json:"spec_version"`
+	ComposeHash         string `db:"compose_hash" json:"compose_hash"`
+	EnvContractHash     string `db:"env_contract_hash" json:"env_contract_hash"`
+	SecretContractHash  string `db:"secret_contract_hash" json:"secret_contract_hash"`
+	ImageRefsJson       string `db:"image_refs_json" json:"image_refs_json"`
+	NetworkPolicyJson   string `db:"network_policy_json" json:"network_policy_json"`
+	IdentityContextHash string `db:"identity_context_hash" json:"identity_context_hash"`
+	CreatedAt           string `db:"created_at" json:"created_at"`
+}
+
+// InsertTenantRuntimeSpec
+//
+//	INSERT INTO tenant_runtime_specs (spec_id, tenant_id, service_id, subject_sub, spec_version, compose_hash, env_contract_hash, secret_contract_hash, image_refs_json, network_policy_json, identity_context_hash, created_at)
+//	VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+func (q *Queries) InsertTenantRuntimeSpec(ctx context.Context, arg InsertTenantRuntimeSpecParams) error {
+	_, err := q.db.ExecContext(ctx, InsertTenantRuntimeSpec,
+		arg.SpecID,
+		arg.TenantID,
+		arg.ServiceID,
+		arg.SubjectSub,
+		arg.SpecVersion,
+		arg.ComposeHash,
+		arg.EnvContractHash,
+		arg.SecretContractHash,
+		arg.ImageRefsJson,
+		arg.NetworkPolicyJson,
+		arg.IdentityContextHash,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const ListDesiredTenantSpecs = `-- name: ListDesiredTenantSpecs :many
 SELECT subjects.subject_sub,
        subjects.subject_key,
@@ -414,6 +1312,7 @@ FROM service_grants
 JOIN subjects ON subjects.subject_sub = service_grants.subject_sub
 JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
 WHERE service_catalog.enabled = 1
+  AND service_catalog.source = 'builtin'
 ORDER BY service_grants.service_id, subjects.subject_sub
 `
 
@@ -442,6 +1341,7 @@ type ListDesiredTenantSpecsRow struct {
 //	JOIN subjects ON subjects.subject_sub = service_grants.subject_sub
 //	JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
 //	WHERE service_catalog.enabled = 1
+//	  AND service_catalog.source = 'builtin'
 //	ORDER BY service_grants.service_id, subjects.subject_sub
 func (q *Queries) ListDesiredTenantSpecs(ctx context.Context) ([]ListDesiredTenantSpecsRow, error) {
 	rows, err := q.db.QueryContext(ctx, ListDesiredTenantSpecs)
@@ -461,6 +1361,266 @@ func (q *Queries) ListDesiredTenantSpecs(ctx context.Context) ([]ListDesiredTena
 			&i.AccountBindingID,
 			&i.AccountBindingClaim,
 			&i.ServiceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListMemoryBankProjectSharesForSubject = `-- name: ListMemoryBankProjectSharesForSubject :many
+SELECT memory_bank_project_shares.share_id,
+       memory_bank_project_shares.project_id,
+       memory_bank_project_shares.owner_subject_sub,
+       memory_bank_project_shares.collaborator_subject_sub,
+       memory_bank_project_shares.permission,
+       memory_bank_project_shares.state,
+       memory_bank_project_shares.source,
+       memory_bank_project_shares.created_by_subject_sub,
+       memory_bank_project_shares.accepted_at,
+       memory_bank_project_shares.revoked_at,
+       memory_bank_project_shares.expires_at,
+       memory_bank_project_shares.metadata,
+       memory_bank_project_shares.created_at,
+       memory_bank_project_shares.updated_at
+FROM memory_bank_project_shares
+JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+WHERE memory_bank_project_shares.collaborator_subject_sub = ?1
+  AND (?2 OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(?3)) AND memory_bank_projects.archived_at IS NULL))
+ORDER BY memory_bank_project_shares.updated_at DESC
+`
+
+type ListMemoryBankProjectSharesForSubjectParams struct {
+	CollaboratorSubjectSub string      `db:"collaborator_subject_sub" json:"collaborator_subject_sub"`
+	IncludeInactive        interface{} `db:"include_inactive" json:"include_inactive"`
+	Now                    interface{} `db:"now" json:"now"`
+}
+
+// ListMemoryBankProjectSharesForSubject
+//
+//	SELECT memory_bank_project_shares.share_id,
+//	       memory_bank_project_shares.project_id,
+//	       memory_bank_project_shares.owner_subject_sub,
+//	       memory_bank_project_shares.collaborator_subject_sub,
+//	       memory_bank_project_shares.permission,
+//	       memory_bank_project_shares.state,
+//	       memory_bank_project_shares.source,
+//	       memory_bank_project_shares.created_by_subject_sub,
+//	       memory_bank_project_shares.accepted_at,
+//	       memory_bank_project_shares.revoked_at,
+//	       memory_bank_project_shares.expires_at,
+//	       memory_bank_project_shares.metadata,
+//	       memory_bank_project_shares.created_at,
+//	       memory_bank_project_shares.updated_at
+//	FROM memory_bank_project_shares
+//	JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+//	WHERE memory_bank_project_shares.collaborator_subject_sub = ?1
+//	  AND (?2 OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(?3)) AND memory_bank_projects.archived_at IS NULL))
+//	ORDER BY memory_bank_project_shares.updated_at DESC
+func (q *Queries) ListMemoryBankProjectSharesForSubject(ctx context.Context, arg ListMemoryBankProjectSharesForSubjectParams) ([]MemoryBankProjectShare, error) {
+	rows, err := q.db.QueryContext(ctx, ListMemoryBankProjectSharesForSubject, arg.CollaboratorSubjectSub, arg.IncludeInactive, arg.Now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MemoryBankProjectShare{}
+	for rows.Next() {
+		var i MemoryBankProjectShare
+		if err := rows.Scan(
+			&i.ShareID,
+			&i.ProjectID,
+			&i.OwnerSubjectSub,
+			&i.CollaboratorSubjectSub,
+			&i.Permission,
+			&i.State,
+			&i.Source,
+			&i.CreatedBySubjectSub,
+			&i.AcceptedAt,
+			&i.RevokedAt,
+			&i.ExpiresAt,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListMemoryBankProjectSharesForSubjectService = `-- name: ListMemoryBankProjectSharesForSubjectService :many
+SELECT memory_bank_project_shares.share_id,
+       memory_bank_project_shares.project_id,
+       memory_bank_project_shares.owner_subject_sub,
+       memory_bank_project_shares.collaborator_subject_sub,
+       memory_bank_project_shares.permission,
+       memory_bank_project_shares.state,
+       memory_bank_project_shares.source,
+       memory_bank_project_shares.created_by_subject_sub,
+       memory_bank_project_shares.accepted_at,
+       memory_bank_project_shares.revoked_at,
+       memory_bank_project_shares.expires_at,
+       memory_bank_project_shares.metadata,
+       memory_bank_project_shares.created_at,
+       memory_bank_project_shares.updated_at
+FROM memory_bank_project_shares
+JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+WHERE memory_bank_project_shares.collaborator_subject_sub = ?1
+  AND memory_bank_projects.service_id = ?2
+  AND (?3 OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(?4)) AND memory_bank_projects.archived_at IS NULL))
+ORDER BY memory_bank_project_shares.updated_at DESC
+`
+
+type ListMemoryBankProjectSharesForSubjectServiceParams struct {
+	CollaboratorSubjectSub string      `db:"collaborator_subject_sub" json:"collaborator_subject_sub"`
+	ServiceID              string      `db:"service_id" json:"service_id"`
+	IncludeInactive        interface{} `db:"include_inactive" json:"include_inactive"`
+	Now                    interface{} `db:"now" json:"now"`
+}
+
+// ListMemoryBankProjectSharesForSubjectService
+//
+//	SELECT memory_bank_project_shares.share_id,
+//	       memory_bank_project_shares.project_id,
+//	       memory_bank_project_shares.owner_subject_sub,
+//	       memory_bank_project_shares.collaborator_subject_sub,
+//	       memory_bank_project_shares.permission,
+//	       memory_bank_project_shares.state,
+//	       memory_bank_project_shares.source,
+//	       memory_bank_project_shares.created_by_subject_sub,
+//	       memory_bank_project_shares.accepted_at,
+//	       memory_bank_project_shares.revoked_at,
+//	       memory_bank_project_shares.expires_at,
+//	       memory_bank_project_shares.metadata,
+//	       memory_bank_project_shares.created_at,
+//	       memory_bank_project_shares.updated_at
+//	FROM memory_bank_project_shares
+//	JOIN memory_bank_projects ON memory_bank_projects.project_id = memory_bank_project_shares.project_id
+//	WHERE memory_bank_project_shares.collaborator_subject_sub = ?1
+//	  AND memory_bank_projects.service_id = ?2
+//	  AND (?3 OR (memory_bank_project_shares.state IN ('pending', 'active') AND (memory_bank_project_shares.expires_at IS NULL OR julianday(memory_bank_project_shares.expires_at) > julianday(?4)) AND memory_bank_projects.archived_at IS NULL))
+//	ORDER BY memory_bank_project_shares.updated_at DESC
+func (q *Queries) ListMemoryBankProjectSharesForSubjectService(ctx context.Context, arg ListMemoryBankProjectSharesForSubjectServiceParams) ([]MemoryBankProjectShare, error) {
+	rows, err := q.db.QueryContext(ctx, ListMemoryBankProjectSharesForSubjectService,
+		arg.CollaboratorSubjectSub,
+		arg.ServiceID,
+		arg.IncludeInactive,
+		arg.Now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MemoryBankProjectShare{}
+	for rows.Next() {
+		var i MemoryBankProjectShare
+		if err := rows.Scan(
+			&i.ShareID,
+			&i.ProjectID,
+			&i.OwnerSubjectSub,
+			&i.CollaboratorSubjectSub,
+			&i.Permission,
+			&i.State,
+			&i.Source,
+			&i.CreatedBySubjectSub,
+			&i.AcceptedAt,
+			&i.RevokedAt,
+			&i.ExpiresAt,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListMemoryBankProjectsByOwner = `-- name: ListMemoryBankProjectsByOwner :many
+SELECT project_id,
+       owner_subject_sub,
+       owner_tenant_id,
+       service_id,
+       project_key,
+       display_name,
+       root_path,
+       metadata,
+       archived_at,
+       created_at,
+       updated_at
+FROM memory_bank_projects
+WHERE owner_subject_sub = ?1
+  AND service_id = ?2
+  AND (?3 OR archived_at IS NULL)
+ORDER BY project_key
+`
+
+type ListMemoryBankProjectsByOwnerParams struct {
+	OwnerSubjectSub string      `db:"owner_subject_sub" json:"owner_subject_sub"`
+	ServiceID       string      `db:"service_id" json:"service_id"`
+	IncludeArchived interface{} `db:"include_archived" json:"include_archived"`
+}
+
+// ListMemoryBankProjectsByOwner
+//
+//	SELECT project_id,
+//	       owner_subject_sub,
+//	       owner_tenant_id,
+//	       service_id,
+//	       project_key,
+//	       display_name,
+//	       root_path,
+//	       metadata,
+//	       archived_at,
+//	       created_at,
+//	       updated_at
+//	FROM memory_bank_projects
+//	WHERE owner_subject_sub = ?1
+//	  AND service_id = ?2
+//	  AND (?3 OR archived_at IS NULL)
+//	ORDER BY project_key
+func (q *Queries) ListMemoryBankProjectsByOwner(ctx context.Context, arg ListMemoryBankProjectsByOwnerParams) ([]MemoryBankProject, error) {
+	rows, err := q.db.QueryContext(ctx, ListMemoryBankProjectsByOwner, arg.OwnerSubjectSub, arg.ServiceID, arg.IncludeArchived)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MemoryBankProject{}
+	for rows.Next() {
+		var i MemoryBankProject
+		if err := rows.Scan(
+			&i.ProjectID,
+			&i.OwnerSubjectSub,
+			&i.OwnerTenantID,
+			&i.ServiceID,
+			&i.ProjectKey,
+			&i.DisplayName,
+			&i.RootPath,
+			&i.Metadata,
+			&i.ArchivedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -558,11 +1718,40 @@ SELECT tenant_id,
        last_reconciled_at,
        last_error,
        metadata,
+       attestation_state,
+       last_attested_at,
+       last_attestation_id,
+       runtime_spec_id,
        created_at,
        updated_at
 FROM tenant_instances
 ORDER BY service_id, subject_sub
 `
+
+type ListTenantInstancesRow struct {
+	TenantID             []byte         `db:"tenant_id" json:"tenant_id"`
+	SubjectSub           string         `db:"subject_sub" json:"subject_sub"`
+	ServiceID            string         `db:"service_id" json:"service_id"`
+	SubjectKey           string         `db:"subject_key" json:"subject_key"`
+	TenantInstanceName   string         `db:"tenant_instance_name" json:"tenant_instance_name"`
+	InternalDnsName      string         `db:"internal_dns_name" json:"internal_dns_name"`
+	DesiredState         string         `db:"desired_state" json:"desired_state"`
+	RuntimeState         string         `db:"runtime_state" json:"runtime_state"`
+	CoolifyResourceID    sql.NullString `db:"coolify_resource_id" json:"coolify_resource_id"`
+	CoolifyApplicationID sql.NullString `db:"coolify_application_id" json:"coolify_application_id"`
+	UpstreamUrl          sql.NullString `db:"upstream_url" json:"upstream_url"`
+	SecretVersion        sql.NullString `db:"secret_version" json:"secret_version"`
+	LastHealthyAt        sql.NullString `db:"last_healthy_at" json:"last_healthy_at"`
+	LastReconciledAt     sql.NullString `db:"last_reconciled_at" json:"last_reconciled_at"`
+	LastError            sql.NullString `db:"last_error" json:"last_error"`
+	Metadata             string         `db:"metadata" json:"metadata"`
+	AttestationState     string         `db:"attestation_state" json:"attestation_state"`
+	LastAttestedAt       sql.NullString `db:"last_attested_at" json:"last_attested_at"`
+	LastAttestationID    []byte         `db:"last_attestation_id" json:"last_attestation_id"`
+	RuntimeSpecID        []byte         `db:"runtime_spec_id" json:"runtime_spec_id"`
+	CreatedAt            string         `db:"created_at" json:"created_at"`
+	UpdatedAt            string         `db:"updated_at" json:"updated_at"`
+}
 
 // ListTenantInstances
 //
@@ -582,19 +1771,23 @@ ORDER BY service_id, subject_sub
 //	       last_reconciled_at,
 //	       last_error,
 //	       metadata,
+//	       attestation_state,
+//	       last_attested_at,
+//	       last_attestation_id,
+//	       runtime_spec_id,
 //	       created_at,
 //	       updated_at
 //	FROM tenant_instances
 //	ORDER BY service_id, subject_sub
-func (q *Queries) ListTenantInstances(ctx context.Context) ([]TenantInstance, error) {
+func (q *Queries) ListTenantInstances(ctx context.Context) ([]ListTenantInstancesRow, error) {
 	rows, err := q.db.QueryContext(ctx, ListTenantInstances)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []TenantInstance{}
+	items := []ListTenantInstancesRow{}
 	for rows.Next() {
-		var i TenantInstance
+		var i ListTenantInstancesRow
 		if err := rows.Scan(
 			&i.TenantID,
 			&i.SubjectSub,
@@ -612,6 +1805,10 @@ func (q *Queries) ListTenantInstances(ctx context.Context) ([]TenantInstance, er
 			&i.LastReconciledAt,
 			&i.LastError,
 			&i.Metadata,
+			&i.AttestationState,
+			&i.LastAttestedAt,
+			&i.LastAttestationID,
+			&i.RuntimeSpecID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -626,6 +1823,203 @@ func (q *Queries) ListTenantInstances(ctx context.Context) ([]TenantInstance, er
 		return nil, err
 	}
 	return items, nil
+}
+
+const ListTenantRuntimeMeasurementsForTenant = `-- name: ListTenantRuntimeMeasurementsForTenant :many
+SELECT measurement_id,
+       tenant_id,
+       coolify_resource_id,
+       container_id,
+       source,
+       image_ref,
+       image_digest,
+       compose_hash,
+       env_contract_hash,
+       network_json,
+       ports_json,
+       volumes_json,
+       health_status,
+       raw_summary_json,
+       measured_at
+FROM tenant_runtime_measurements
+WHERE tenant_id = ?1
+ORDER BY measured_at DESC
+`
+
+type ListTenantRuntimeMeasurementsForTenantParams struct {
+	TenantID []byte `db:"tenant_id" json:"tenant_id"`
+}
+
+// ListTenantRuntimeMeasurementsForTenant
+//
+//	SELECT measurement_id,
+//	       tenant_id,
+//	       coolify_resource_id,
+//	       container_id,
+//	       source,
+//	       image_ref,
+//	       image_digest,
+//	       compose_hash,
+//	       env_contract_hash,
+//	       network_json,
+//	       ports_json,
+//	       volumes_json,
+//	       health_status,
+//	       raw_summary_json,
+//	       measured_at
+//	FROM tenant_runtime_measurements
+//	WHERE tenant_id = ?1
+//	ORDER BY measured_at DESC
+func (q *Queries) ListTenantRuntimeMeasurementsForTenant(ctx context.Context, arg ListTenantRuntimeMeasurementsForTenantParams) ([]TenantRuntimeMeasurement, error) {
+	rows, err := q.db.QueryContext(ctx, ListTenantRuntimeMeasurementsForTenant, arg.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TenantRuntimeMeasurement{}
+	for rows.Next() {
+		var i TenantRuntimeMeasurement
+		if err := rows.Scan(
+			&i.MeasurementID,
+			&i.TenantID,
+			&i.CoolifyResourceID,
+			&i.ContainerID,
+			&i.Source,
+			&i.ImageRef,
+			&i.ImageDigest,
+			&i.ComposeHash,
+			&i.EnvContractHash,
+			&i.NetworkJson,
+			&i.PortsJson,
+			&i.VolumesJson,
+			&i.HealthStatus,
+			&i.RawSummaryJson,
+			&i.MeasuredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListTenantRuntimeSpecsForTenant = `-- name: ListTenantRuntimeSpecsForTenant :many
+SELECT spec_id,
+       tenant_id,
+       service_id,
+       subject_sub,
+       spec_version,
+       compose_hash,
+       env_contract_hash,
+       secret_contract_hash,
+       image_refs_json,
+       network_policy_json,
+       identity_context_hash,
+       created_at
+FROM tenant_runtime_specs
+WHERE tenant_id = ?1
+ORDER BY created_at DESC
+`
+
+type ListTenantRuntimeSpecsForTenantParams struct {
+	TenantID []byte `db:"tenant_id" json:"tenant_id"`
+}
+
+// ListTenantRuntimeSpecsForTenant
+//
+//	SELECT spec_id,
+//	       tenant_id,
+//	       service_id,
+//	       subject_sub,
+//	       spec_version,
+//	       compose_hash,
+//	       env_contract_hash,
+//	       secret_contract_hash,
+//	       image_refs_json,
+//	       network_policy_json,
+//	       identity_context_hash,
+//	       created_at
+//	FROM tenant_runtime_specs
+//	WHERE tenant_id = ?1
+//	ORDER BY created_at DESC
+func (q *Queries) ListTenantRuntimeSpecsForTenant(ctx context.Context, arg ListTenantRuntimeSpecsForTenantParams) ([]TenantRuntimeSpec, error) {
+	rows, err := q.db.QueryContext(ctx, ListTenantRuntimeSpecsForTenant, arg.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TenantRuntimeSpec{}
+	for rows.Next() {
+		var i TenantRuntimeSpec
+		if err := rows.Scan(
+			&i.SpecID,
+			&i.TenantID,
+			&i.ServiceID,
+			&i.SubjectSub,
+			&i.SpecVersion,
+			&i.ComposeHash,
+			&i.EnvContractHash,
+			&i.SecretContractHash,
+			&i.ImageRefsJson,
+			&i.NetworkPolicyJson,
+			&i.IdentityContextHash,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const MarkTenantAttestationSummary = `-- name: MarkTenantAttestationSummary :exec
+UPDATE tenant_instances
+SET attestation_state = ?1,
+    last_attested_at = ?2,
+    last_attestation_id = ?3,
+    runtime_spec_id = CASE WHEN ?4 IS NULL THEN runtime_spec_id ELSE ?4 END,
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_id = ?5
+`
+
+type MarkTenantAttestationSummaryParams struct {
+	Verdict       string         `db:"verdict" json:"verdict"`
+	AttestedAt    sql.NullString `db:"attested_at" json:"attested_at"`
+	AttestationID []byte         `db:"attestation_id" json:"attestation_id"`
+	SpecID        interface{}    `db:"spec_id" json:"spec_id"`
+	TenantID      []byte         `db:"tenant_id" json:"tenant_id"`
+}
+
+// MarkTenantAttestationSummary
+//
+//	UPDATE tenant_instances
+//	SET attestation_state = ?1,
+//	    last_attested_at = ?2,
+//	    last_attestation_id = ?3,
+//	    runtime_spec_id = CASE WHEN ?4 IS NULL THEN runtime_spec_id ELSE ?4 END,
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE tenant_id = ?5
+func (q *Queries) MarkTenantAttestationSummary(ctx context.Context, arg MarkTenantAttestationSummaryParams) error {
+	_, err := q.db.ExecContext(ctx, MarkTenantAttestationSummary,
+		arg.Verdict,
+		arg.AttestedAt,
+		arg.AttestationID,
+		arg.SpecID,
+		arg.TenantID,
+	)
+	return err
 }
 
 const MarkTenantDesiredDeleted = `-- name: MarkTenantDesiredDeleted :exec
@@ -649,6 +2043,82 @@ type MarkTenantDesiredDeletedParams struct {
 func (q *Queries) MarkTenantDesiredDeleted(ctx context.Context, arg MarkTenantDesiredDeletedParams) error {
 	_, err := q.db.ExecContext(ctx, MarkTenantDesiredDeleted, arg.DesiredState, arg.TenantID)
 	return err
+}
+
+const MarkTenantDesiredDisabledBySubjectService = `-- name: MarkTenantDesiredDisabledBySubjectService :execrows
+UPDATE tenant_instances
+SET desired_state = 'disabled',
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_instances.subject_sub = ?1
+  AND tenant_instances.service_id = ?2
+  AND tenant_instances.desired_state <> 'deleted'
+`
+
+type MarkTenantDesiredDisabledBySubjectServiceParams struct {
+	TargetSubjectSub string `db:"target_subject_sub" json:"target_subject_sub"`
+	TargetServiceID  string `db:"target_service_id" json:"target_service_id"`
+}
+
+// MarkTenantDesiredDisabledBySubjectService
+//
+//	UPDATE tenant_instances
+//	SET desired_state = 'disabled',
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE tenant_instances.subject_sub = ?1
+//	  AND tenant_instances.service_id = ?2
+//	  AND tenant_instances.desired_state <> 'deleted'
+func (q *Queries) MarkTenantDesiredDisabledBySubjectService(ctx context.Context, arg MarkTenantDesiredDisabledBySubjectServiceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, MarkTenantDesiredDisabledBySubjectService, arg.TargetSubjectSub, arg.TargetServiceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const MarkTenantDesiredEnabledBySubjectServiceWithGrant = `-- name: MarkTenantDesiredEnabledBySubjectServiceWithGrant :execrows
+UPDATE tenant_instances
+SET desired_state = 'enabled',
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_instances.subject_sub = ?1
+  AND tenant_instances.service_id = ?2
+  AND tenant_instances.desired_state <> 'deleted'
+  AND EXISTS (
+    SELECT 1
+    FROM service_grants
+    JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
+    WHERE service_grants.subject_sub = tenant_instances.subject_sub
+      AND service_grants.service_id = tenant_instances.service_id
+      AND service_catalog.enabled = 1
+  )
+`
+
+type MarkTenantDesiredEnabledBySubjectServiceWithGrantParams struct {
+	TargetSubjectSub string `db:"target_subject_sub" json:"target_subject_sub"`
+	TargetServiceID  string `db:"target_service_id" json:"target_service_id"`
+}
+
+// MarkTenantDesiredEnabledBySubjectServiceWithGrant
+//
+//	UPDATE tenant_instances
+//	SET desired_state = 'enabled',
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE tenant_instances.subject_sub = ?1
+//	  AND tenant_instances.service_id = ?2
+//	  AND tenant_instances.desired_state <> 'deleted'
+//	  AND EXISTS (
+//	    SELECT 1
+//	    FROM service_grants
+//	    JOIN service_catalog ON service_catalog.service_id = service_grants.service_id
+//	    WHERE service_grants.subject_sub = tenant_instances.subject_sub
+//	      AND service_grants.service_id = tenant_instances.service_id
+//	      AND service_catalog.enabled = 1
+//	  )
+func (q *Queries) MarkTenantDesiredEnabledBySubjectServiceWithGrant(ctx context.Context, arg MarkTenantDesiredEnabledBySubjectServiceWithGrantParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, MarkTenantDesiredEnabledBySubjectServiceWithGrant, arg.TargetSubjectSub, arg.TargetServiceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const MarkTenantReconciled = `-- name: MarkTenantReconciled :exec
@@ -677,6 +2147,29 @@ func (q *Queries) MarkTenantReconciled(ctx context.Context, arg MarkTenantReconc
 	return err
 }
 
+const MarkTenantRuntimeSpec = `-- name: MarkTenantRuntimeSpec :exec
+UPDATE tenant_instances
+SET runtime_spec_id = ?1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE tenant_id = ?2
+`
+
+type MarkTenantRuntimeSpecParams struct {
+	SpecID   []byte `db:"spec_id" json:"spec_id"`
+	TenantID []byte `db:"tenant_id" json:"tenant_id"`
+}
+
+// MarkTenantRuntimeSpec
+//
+//	UPDATE tenant_instances
+//	SET runtime_spec_id = ?1,
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE tenant_id = ?2
+func (q *Queries) MarkTenantRuntimeSpec(ctx context.Context, arg MarkTenantRuntimeSpecParams) error {
+	_, err := q.db.ExecContext(ctx, MarkTenantRuntimeSpec, arg.SpecID, arg.TenantID)
+	return err
+}
+
 const RebuildEffectiveServiceGrants = `-- name: RebuildEffectiveServiceGrants :exec
 DELETE FROM service_grants
 `
@@ -687,6 +2180,36 @@ DELETE FROM service_grants
 func (q *Queries) RebuildEffectiveServiceGrants(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, RebuildEffectiveServiceGrants)
 	return err
+}
+
+const RevokeMemoryBankProjectShare = `-- name: RevokeMemoryBankProjectShare :execrows
+UPDATE memory_bank_project_shares
+SET state = 'revoked',
+    revoked_at = ?1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE share_id = ?2
+  AND state <> 'revoked'
+`
+
+type RevokeMemoryBankProjectShareParams struct {
+	RevokedAt sql.NullString `db:"revoked_at" json:"revoked_at"`
+	ShareID   []byte         `db:"share_id" json:"share_id"`
+}
+
+// RevokeMemoryBankProjectShare
+//
+//	UPDATE memory_bank_project_shares
+//	SET state = 'revoked',
+//	    revoked_at = ?1,
+//	    updated_at = CURRENT_TIMESTAMP
+//	WHERE share_id = ?2
+//	  AND state <> 'revoked'
+func (q *Queries) RevokeMemoryBankProjectShare(ctx context.Context, arg RevokeMemoryBankProjectShareParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, RevokeMemoryBankProjectShare, arg.RevokedAt, arg.ShareID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const UpdateTenantRuntimeStatus = `-- name: UpdateTenantRuntimeStatus :exec
@@ -760,6 +2283,60 @@ type UpsertManualServiceGrantSourceParams struct {
 func (q *Queries) UpsertManualServiceGrantSource(ctx context.Context, arg UpsertManualServiceGrantSourceParams) error {
 	_, err := q.db.ExecContext(ctx, UpsertManualServiceGrantSource, arg.SubjectSub, arg.ServiceID)
 	return err
+}
+
+const UpsertMemoryBankProject = `-- name: UpsertMemoryBankProject :one
+INSERT INTO memory_bank_projects (project_id, owner_subject_sub, owner_tenant_id, service_id, project_key, display_name, root_path, metadata, archived_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+ON CONFLICT(owner_subject_sub, service_id, project_key) DO UPDATE SET
+    owner_tenant_id = excluded.owner_tenant_id,
+    display_name = excluded.display_name,
+    root_path = excluded.root_path,
+    metadata = excluded.metadata,
+    archived_at = COALESCE(excluded.archived_at, memory_bank_projects.archived_at),
+    updated_at = CURRENT_TIMESTAMP
+RETURNING project_id
+`
+
+type UpsertMemoryBankProjectParams struct {
+	ProjectID       []byte         `db:"project_id" json:"project_id"`
+	OwnerSubjectSub string         `db:"owner_subject_sub" json:"owner_subject_sub"`
+	OwnerTenantID   []byte         `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ServiceID       string         `db:"service_id" json:"service_id"`
+	ProjectKey      string         `db:"project_key" json:"project_key"`
+	DisplayName     string         `db:"display_name" json:"display_name"`
+	RootPath        string         `db:"root_path" json:"root_path"`
+	Metadata        string         `db:"metadata" json:"metadata"`
+	ArchivedAt      sql.NullString `db:"archived_at" json:"archived_at"`
+}
+
+// UpsertMemoryBankProject
+//
+//	INSERT INTO memory_bank_projects (project_id, owner_subject_sub, owner_tenant_id, service_id, project_key, display_name, root_path, metadata, archived_at)
+//	VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+//	ON CONFLICT(owner_subject_sub, service_id, project_key) DO UPDATE SET
+//	    owner_tenant_id = excluded.owner_tenant_id,
+//	    display_name = excluded.display_name,
+//	    root_path = excluded.root_path,
+//	    metadata = excluded.metadata,
+//	    archived_at = COALESCE(excluded.archived_at, memory_bank_projects.archived_at),
+//	    updated_at = CURRENT_TIMESTAMP
+//	RETURNING project_id
+func (q *Queries) UpsertMemoryBankProject(ctx context.Context, arg UpsertMemoryBankProjectParams) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, UpsertMemoryBankProject,
+		arg.ProjectID,
+		arg.OwnerSubjectSub,
+		arg.OwnerTenantID,
+		arg.ServiceID,
+		arg.ProjectKey,
+		arg.DisplayName,
+		arg.RootPath,
+		arg.Metadata,
+		arg.ArchivedAt,
+	)
+	var project_id []byte
+	err := row.Scan(&project_id)
+	return project_id, err
 }
 
 const UpsertStaticTenantUpstream = `-- name: UpsertStaticTenantUpstream :exec

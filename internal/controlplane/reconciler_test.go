@@ -44,6 +44,17 @@ func TestPlanTenantAction(t *testing.T) {
 			},
 		},
 		{
+			name: "enabled disabled becomes enable",
+			tenant: TenantInstance{
+				DesiredState: domain.TenantDesiredStateEnabled,
+				RuntimeState: domain.TenantRuntimeStateDisabled,
+			},
+			expected: TenantPlan{
+				Action: ReconcileActionEnable,
+				Reason: "tenant is disabled but desired state is enabled",
+			},
+		},
+		{
 			name: "disabled ready becomes disable",
 			tenant: TenantInstance{
 				DesiredState: domain.TenantDesiredStateDisabled,
@@ -52,6 +63,17 @@ func TestPlanTenantAction(t *testing.T) {
 			expected: TenantPlan{
 				Action: ReconcileActionDisable,
 				Reason: "tenant should be disabled by control-plane intent",
+			},
+		},
+		{
+			name: "disabled disabled becomes noop",
+			tenant: TenantInstance{
+				DesiredState: domain.TenantDesiredStateDisabled,
+				RuntimeState: domain.TenantRuntimeStateDisabled,
+			},
+			expected: TenantPlan{
+				Action: ReconcileActionNoop,
+				Reason: "tenant already disabled",
 			},
 		},
 		{
@@ -97,7 +119,7 @@ func TestReconcilerRunOnceRecordsDeferredRuns(t *testing.T) {
 			{
 				TenantID:     ids.New(),
 				SubjectSub:   "authentik|user-1",
-				ServiceID:    "mealie",
+				ServiceID:    "example-a",
 				DesiredState: domain.TenantDesiredStateEnabled,
 				RuntimeState: domain.TenantRuntimeStateDegraded,
 				LastError:    "tenant identity drift detected; reprovision required",
@@ -105,7 +127,7 @@ func TestReconcilerRunOnceRecordsDeferredRuns(t *testing.T) {
 			{
 				TenantID:     ids.New(),
 				SubjectSub:   "authentik|user-2",
-				ServiceID:    "actualbudget",
+				ServiceID:    "example-b",
 				DesiredState: domain.TenantDesiredStateDeleted,
 				RuntimeState: domain.TenantRuntimeStateReady,
 			},
@@ -169,7 +191,7 @@ func TestReconcilerRunOnceDeletesCompletedTenants(t *testing.T) {
 			{
 				TenantID:     tenantID,
 				SubjectSub:   "authentik|user-4",
-				ServiceID:    "actualbudget",
+				ServiceID:    "example-b",
 				DesiredState: domain.TenantDesiredStateDeleted,
 				RuntimeState: domain.TenantRuntimeStateDeleting,
 			},
@@ -236,7 +258,7 @@ func TestReconcilerRunOnceStopsWhenLeadershipCheckFails(t *testing.T) {
 			{
 				TenantID:     tenantID,
 				SubjectSub:   "authentik|user-6",
-				ServiceID:    "mealie",
+				ServiceID:    "example-a",
 				DesiredState: domain.TenantDesiredStateEnabled,
 				RuntimeState: domain.TenantRuntimeStateDegraded,
 			},

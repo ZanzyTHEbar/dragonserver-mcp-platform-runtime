@@ -46,15 +46,6 @@ func NewFixtureResolver(cfg Config) (*FixtureResolver, error) {
 	}
 
 	upstreams := make(map[string]*url.URL, len(entries))
-	if err := addUpstream(upstreams, "mealie", cfg.FixtureUpstreamMealieURL); err != nil {
-		return nil, err
-	}
-	if err := addUpstream(upstreams, "actualbudget", cfg.FixtureUpstreamActualBudgetURL); err != nil {
-		return nil, err
-	}
-	if err := addUpstream(upstreams, "memory", cfg.FixtureUpstreamMemoryURL); err != nil {
-		return nil, err
-	}
 
 	return &FixtureResolver{
 		services:  services,
@@ -183,24 +174,4 @@ func tenantRuntimeModeStatic(metadata string) bool {
 		return false
 	}
 	return payload.RuntimeMode == "static_upstream"
-}
-
-func addUpstream(upstreams map[string]*url.URL, serviceID string, rawURL string) error {
-	if rawURL == "" {
-		return nil
-	}
-
-	parsedURL, err := url.Parse(rawURL)
-	if err != nil {
-		return err
-	}
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("fixture upstream %s must use http or https", serviceID)
-	}
-	if parsedURL.Host == "" {
-		return fmt.Errorf("fixture upstream %s must include a host", serviceID)
-	}
-
-	upstreams[serviceID] = parsedURL
-	return nil
 }

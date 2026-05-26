@@ -20,20 +20,20 @@ func TestCatalogSnapshotMatchesExactAndNestedPublicPaths(t *testing.T) {
 	t.Parallel()
 
 	snapshot, err := newCatalogSnapshot([]catalog.ServiceCatalogEntry{
-		{ServiceID: "memory", PublicPath: "/memory/mcp"},
-		{ServiceID: "mealie", PublicPath: "/mealie/mcp"},
+		{ServiceID: "example-c", PublicPath: "/example-c/mcp"},
+		{ServiceID: "example-a", PublicPath: "/example-a/mcp"},
 	}, time.Now().UTC())
 	require.NoError(t, err)
 
-	service, ok := snapshot.MatchPublicPath("/memory/mcp")
+	service, ok := snapshot.MatchPublicPath("/example-c/mcp")
 	require.True(t, ok)
-	require.Equal(t, "memory", service.ServiceID)
+	require.Equal(t, "example-c", service.ServiceID)
 
-	service, ok = snapshot.MatchPublicPath("/memory/mcp/tools/list")
+	service, ok = snapshot.MatchPublicPath("/example-c/mcp/tools/list")
 	require.True(t, ok)
-	require.Equal(t, "memory", service.ServiceID)
+	require.Equal(t, "example-c", service.ServiceID)
 
-	_, ok = snapshot.MatchPublicPath("/memory/mcp2")
+	_, ok = snapshot.MatchPublicPath("/example-c/mcp2")
 	require.False(t, ok)
 }
 
@@ -43,11 +43,11 @@ func TestCatalogCacheRefreshKeepsLastGoodSnapshotOnError(t *testing.T) {
 	store := newMutableCatalogStore(t)
 	cache := NewCatalogCache(store, zerolog.Nop())
 	require.NoError(t, cache.Refresh(context.Background()))
-	require.Equal(t, 3, cache.Len())
+	require.Equal(t, len(testServiceCatalogEntries()), cache.Len())
 
 	store.err = errors.New("database unavailable")
 	require.Error(t, cache.Refresh(context.Background()))
-	require.Equal(t, 3, cache.Len())
+	require.Equal(t, len(testServiceCatalogEntries()), cache.Len())
 	require.Equal(t, "database unavailable", cache.LastError())
 }
 
@@ -78,7 +78,7 @@ func TestServerHandlerUsesRefreshedCatalogWithoutRebuild(t *testing.T) {
 	handler.ServeHTTP(res, req)
 	require.Equal(t, http.StatusNotFound, res.Code)
 
-	newService := catalog.DefaultCatalogV1()[0]
+	newService := testServiceCatalogEntries()[0]
 	newService.ServiceID = "newservice"
 	newService.PublicPath = "/newservice/mcp"
 	store.entries = append(store.entries, newService)
@@ -93,7 +93,7 @@ func TestServerHandlerUsesRefreshedCatalogWithoutRebuild(t *testing.T) {
 	require.Contains(t, res.Header().Get("WWW-Authenticate"), `scope="mcp:newservice"`)
 	require.Contains(t, res.Header().Get("WWW-Authenticate"), `resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/newservice"`)
 
-	store.entries = catalog.DefaultCatalogV1()
+	store.entries = testServiceCatalogEntries()
 	require.NoError(t, server.catalogCache.Refresh(context.Background()))
 	req = httptest.NewRequest(http.MethodGet, "/newservice/mcp", nil)
 	res = httptest.NewRecorder()
@@ -121,13 +121,19 @@ func TestRootDiscoveryReturnsCatalogAndMetadataLinks(t *testing.T) {
 
 	services, ok := payload["services"].([]any)
 	require.True(t, ok)
-	require.Len(t, services, 3)
-	require.Contains(t, res.Body.String(), `"id":"mealie"`)
-	require.Contains(t, res.Body.String(), `"path":"/mealie/mcp"`)
-	require.Contains(t, res.Body.String(), `"url":"https://mcp.example.com/mealie/mcp"`)
-	require.Contains(t, res.Body.String(), `"resource":"https://mcp.example.com/mealie/mcp"`)
-	require.Contains(t, res.Body.String(), `"protected_resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource/mealie"`)
-	require.Contains(t, res.Body.String(), `"scope":"mcp:mealie"`)
+	require.Len(t, services, len(testServiceCatalogEntries()))
+	require.Contains(t, res.Body.String(), `"id":"example-a"`)
+	require.Contains(t, res.Body.String(), `"path":"/example-a/mcp"`)
+	require.Contains(t, res.Body.String(), `"url":"https://mcp.example.com/example-a/mcp"`)
+	require.Contains(t, res.Body.String(), `"resource":"https://mcp.example.com/example-a/mcp"`)
+	require.Contains(t, res.Body.String(), `"protected_resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource/example-a"`)
+	require.Contains(t, res.Body.String(), `"scope":"mcp:example-a"`)
+	require.Contains(t, res.Body.String(), `"id":"example-b"`)
+	require.Contains(t, res.Body.String(), `"path":"/example-b/mcp"`)
+	require.Contains(t, res.Body.String(), `"url":"https://mcp.example.com/example-b/mcp"`)
+	require.Contains(t, res.Body.String(), `"resource":"https://mcp.example.com/example-b/mcp"`)
+	require.Contains(t, res.Body.String(), `"protected_resource_metadata_url":"https://mcp.example.com/.well-known/oauth-protected-resource/example-b"`)
+	require.Contains(t, res.Body.String(), `"scope":"mcp:example-b"`)
 
 	oauth, ok := payload["oauth"].(map[string]any)
 	require.True(t, ok)
@@ -158,9 +164,9 @@ func TestCanonicalServiceMetadataAcrossDiscoveryAndWellKnown(t *testing.T) {
 		} `json:"services"`
 	}
 	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &discovery))
-	require.Len(t, discovery.Services, len(catalog.DefaultCatalogV1()))
+	require.Len(t, discovery.Services, len(testServiceCatalogEntries()))
 
-	for _, entry := range catalog.DefaultCatalogV1() {
+	for _, entry := range testServiceCatalogEntries() {
 		resolution, ok := server.serviceDirectory.ResolveByID(entry.ServiceID)
 		require.True(t, ok)
 
@@ -203,7 +209,7 @@ func TestBearerChallengeUsesCanonicalServiceMetadata(t *testing.T) {
 	server := newTestEdgeServer(t, nil)
 	handler := server.Handler()
 
-	for _, entry := range catalog.DefaultCatalogV1() {
+	for _, entry := range testServiceCatalogEntries() {
 		resolution, ok := server.serviceDirectory.ResolveByID(entry.ServiceID)
 		require.True(t, ok)
 
@@ -306,7 +312,7 @@ func TestRootDiscoveryTrimsPublicBaseURL(t *testing.T) {
 
 	cfg := testEdgeConfig()
 	cfg.PublicBaseURL = "https://mcp.example.com/"
-	server, err := NewServer(cfg, zerolog.Nop(), staticResolver{})
+	server, err := NewServerWithStateStore(context.Background(), cfg, zerolog.Nop(), staticResolver{}, newMutableCatalogStore(t))
 	require.NoError(t, err)
 	handler := server.Handler()
 
@@ -342,16 +348,16 @@ func TestOAuthScopesReflectRefreshedCatalog(t *testing.T) {
 	require.NoError(t, err)
 	handler := server.Handler()
 
-	store.entries = filterCatalogService(store.entries, "mealie")
+	store.entries = filterCatalogService(store.entries, "example-a")
 	require.NoError(t, server.catalogCache.Refresh(context.Background()))
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
 	res := httptest.NewRecorder()
 	handler.ServeHTTP(res, req)
 	require.Equal(t, http.StatusOK, res.Code)
-	require.NotContains(t, res.Body.String(), "mcp:mealie")
+	require.NotContains(t, res.Body.String(), "mcp:example-a")
 
-	registrationBody := `{"client_name":"bad-scope","redirect_uris":["https://client.example.com/callback"],"scope":"mcp:mealie"}`
+	registrationBody := `{"client_name":"bad-scope","redirect_uris":["https://client.example.com/callback"],"scope":"mcp:example-a"}`
 	req = httptest.NewRequest(http.MethodPost, "/oauth/register", strings.NewReader(registrationBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer fixture-operator-token")
@@ -419,7 +425,7 @@ func TestServiceDiagnosticsRequireOperatorTokenAndReportCanonicalMetadata(t *tes
 	}
 	require.NoError(t, json.Unmarshal(res.Body.Bytes(), &payload))
 	require.Equal(t, "ok", payload.Status)
-	require.Len(t, payload.Services, len(catalog.DefaultCatalogV1()))
+	require.Len(t, payload.Services, len(testServiceCatalogEntries()))
 	for _, service := range payload.Services {
 		require.NotEmpty(t, service.ID)
 		require.NotEmpty(t, service.Resource)
@@ -456,7 +462,7 @@ func TestCORSPreflightAllowsMCPTransportHeaders(t *testing.T) {
 	server := newTestEdgeServer(t, nil)
 	handler := server.Handler()
 
-	req := httptest.NewRequest(http.MethodOptions, "/mealie/mcp", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/example-a/mcp", nil)
 	req.Header.Set("Origin", "https://client.example.com")
 	req.Header.Set("Access-Control-Request-Headers", "authorization, mcp-protocol-version, mcp-session-id")
 	res := httptest.NewRecorder()
@@ -474,10 +480,10 @@ func TestCORSPreflightDoesNotAllowUnconfiguredOrigin(t *testing.T) {
 
 	cfg := testEdgeConfig()
 	cfg.CORSAllowedOrigins = []string{"https://trusted.example.com"}
-	server, err := NewServer(cfg, zerolog.Nop(), staticResolver{})
+	server, err := NewServerWithStateStore(context.Background(), cfg, zerolog.Nop(), staticResolver{}, newMutableCatalogStore(t))
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodOptions, "/mealie/mcp", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/example-a/mcp", nil)
 	req.Header.Set("Origin", "https://evil.example.com")
 	res := httptest.NewRecorder()
 	server.Handler().ServeHTTP(res, req)
@@ -492,11 +498,44 @@ type mutableCatalogStore struct {
 	err     error
 }
 
+func testServiceCatalogEntries() []catalog.ServiceCatalogEntry {
+	return []catalog.ServiceCatalogEntry{
+		{
+			ServiceID:              "example-a",
+			DisplayName:            "Example A",
+			UpstreamServiceName:    "example-a-mcp",
+			TransportType:          catalog.TransportTypeStreamableHTTP,
+			InternalPort:           3031,
+			PublicPath:             "/example-a/mcp",
+			InternalUpstreamPath:   "/mcp",
+			HealthPath:             "/health",
+			HealthProbeExpectation: "GET returns OK",
+			ResourceProfile:        "small",
+			PersistencePolicy:      "stateless",
+			AdapterRequirement:     catalog.AdapterRequirementNone,
+		},
+		{
+			ServiceID:              "example-b",
+			DisplayName:            "Example B",
+			UpstreamServiceName:    "example-b-mcp",
+			TransportType:          catalog.TransportTypeStreamableHTTP,
+			InternalPort:           3031,
+			PublicPath:             "/example-b/mcp",
+			InternalUpstreamPath:   "/mcp",
+			HealthPath:             "/health",
+			HealthProbeExpectation: "GET returns OK",
+			ResourceProfile:        "small",
+			PersistencePolicy:      "stateless",
+			AdapterRequirement:     catalog.AdapterRequirementNone,
+		},
+	}
+}
+
 func newMutableCatalogStore(t *testing.T) *mutableCatalogStore {
 	t.Helper()
 	memoryStore, err := newMemoryEdgeStateStore()
 	require.NoError(t, err)
-	return &mutableCatalogStore{memoryEdgeStateStore: memoryStore, entries: catalog.DefaultCatalogV1()}
+	return &mutableCatalogStore{memoryEdgeStateStore: memoryStore, entries: testServiceCatalogEntries()}
 }
 
 func (s *mutableCatalogStore) ListEnabledServiceCatalog(context.Context) ([]catalog.ServiceCatalogEntry, error) {
@@ -518,7 +557,7 @@ func testEdgeConfig() Config {
 		OAuthAuthorizationCodeTTL: defaultOAuthAuthorizationCodeTTL,
 		OAuthDeviceCodeTTL:        defaultOAuthDeviceCodeTTL,
 		FixtureAuthSubjectSub:     "fixture-user",
-		FixtureAuthGroups:         []string{"mcp-users", "mcp-service-mealie"},
+		FixtureAuthGroups:         []string{"mcp-users", "mcp-service-example-a"},
 		FixtureOperatorToken:      "fixture-operator-token",
 	}
 }

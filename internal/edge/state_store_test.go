@@ -14,9 +14,9 @@ import (
 func TestParseRequestedServiceScopes(t *testing.T) {
 	t.Parallel()
 
-	serviceIDs, valid := parseRequestedServiceScopes("mcp:mealie mcp:actualbudget mcp:mealie")
+	serviceIDs, valid := parseRequestedServiceScopes("mcp:example-a mcp:example-b mcp:example-a")
 	require.True(t, valid)
-	require.Equal(t, []string{"mealie", "actualbudget"}, serviceIDs)
+	require.Equal(t, []string{"example-a", "example-b"}, serviceIDs)
 
 	_, valid = parseRequestedServiceScopes("")
 	require.False(t, valid)
@@ -65,7 +65,7 @@ func TestMemoryEdgeStateStoreRoundTrip(t *testing.T) {
 		PreferredUsername:   "fixture-user",
 		AccountBindingID:    "stable-user-id",
 		AccountBindingClaim: "dragonserver_user_id",
-		Groups:              []string{"mcp-users", "mcp-service-mealie"},
+		Groups:              []string{"mcp-users", "mcp-service-example-a"},
 	}
 	require.NoError(t, storeValue.UpsertSubject(context.Background(), claims))
 	gotClaims, ok, err := storeValue.GetSubjectIdentity(context.Background(), claims.Sub)
@@ -73,11 +73,11 @@ func TestMemoryEdgeStateStoreRoundTrip(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, claims, gotClaims)
 
-	allowed, err := storeValue.Allowed(context.Background(), claims.Sub, "mealie")
+	allowed, err := storeValue.Allowed(context.Background(), claims.Sub, "example-a")
 	require.NoError(t, err)
 	require.True(t, allowed)
 
-	allowed, err = storeValue.AllowedScopes(context.Background(), claims.Sub, "mcp:mealie")
+	allowed, err = storeValue.AllowedScopes(context.Background(), claims.Sub, "mcp:example-a")
 	require.NoError(t, err)
 	require.True(t, allowed)
 
@@ -114,7 +114,7 @@ func TestMemoryEdgeStateStoreRoundTrip(t *testing.T) {
 		ResponseTypes:           []string{"code"},
 		TokenEndpointAuthMethod: tokenEndpointAuthMethodClientBasic,
 		Secret:                  "super-secret",
-		Scopes:                  []string{"mcp:mealie"},
+		Scopes:                  []string{"mcp:example-a"},
 	}
 	require.NoError(t, storeValue.CreateClient(context.Background(), client, claims.Sub))
 
@@ -129,9 +129,9 @@ func TestMemoryEdgeStateStoreRoundTrip(t *testing.T) {
 	deviceRecord := deviceAuthorization{
 		ID:              deviceID,
 		ClientID:        client.ID,
-		ServiceID:       "mealie",
-		Resource:        "https://mcp.example.com/mealie/mcp",
-		Scope:           "mcp:mealie",
+		ServiceID:       "example-a",
+		Resource:        "https://mcp.example.com/example-a/mcp",
+		Scope:           "mcp:example-a",
 		DeviceCodeHash:  hashOpaqueValue("device-code"),
 		UserCodeHash:    hashOpaqueValue(normalizeUserCode("ABCD-EFGH")),
 		UserCodeDisplay: "ABCD-EFGH",
@@ -170,9 +170,9 @@ func TestMemoryEdgeStateStoreRoundTrip(t *testing.T) {
 	require.NoError(t, storeValue.CreateDeviceAuthorization(context.Background(), deviceAuthorization{
 		ID:              expiredID,
 		ClientID:        client.ID,
-		ServiceID:       "mealie",
-		Resource:        "https://mcp.example.com/mealie/mcp",
-		Scope:           "mcp:mealie",
+		ServiceID:       "example-a",
+		Resource:        "https://mcp.example.com/example-a/mcp",
+		Scope:           "mcp:example-a",
 		DeviceCodeHash:  hashOpaqueValue("expired-device-code"),
 		UserCodeHash:    hashOpaqueValue(normalizeUserCode("ZZZZ-9999")),
 		UserCodeDisplay: "ZZZZ-9999",
@@ -193,7 +193,7 @@ func TestMemoryEdgeStateStoreRoundTrip(t *testing.T) {
 	token := models.NewToken()
 	token.SetClientID(client.ID)
 	token.SetUserID(claims.Sub)
-	token.SetScope("mcp:mealie")
+	token.SetScope("mcp:example-a")
 	token.SetAccess("access-token")
 	token.SetAccessCreateAt(now)
 	token.SetAccessExpiresIn(time.Hour)
