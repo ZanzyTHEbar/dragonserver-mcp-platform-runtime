@@ -60,13 +60,13 @@ At minimum, configure:
 
 ## Secret files
 
-The Coolify templates mount runtime secrets from `${MCP_SECRETS_DIR:-/data/coolify/mcp-platform-secrets}`, which is visible to Coolify's deployment build container on standard installations. Set `MCP_SECRETS_DIR` if your host uses a different secret directory.
+The Coolify templates mount runtime secrets from `/data/coolify/mcp-platform-secrets`, which is visible to Coolify's deployment build container on standard installations. If your host uses a different secret directory, update the template paths before deployment; Coolify rejects environment interpolation in bind-mount sources.
 
 The templates pass `MCP_DOCKER_NETWORK` into service environment blocks. Some deployment platforms only expose variables to Compose interpolation when they appear in a service environment, even if the variables are also used elsewhere.
 
 Expected files:
 
-Place these files under `MCP_SECRETS_DIR` on the deployment host.
+Place these files under `/data/coolify/mcp-platform-secrets` on the deployment host.
 
 - `mcp-control-plane-infisical-machine-client-secret`
 - `mcp-edge-authentik-client-secret`
@@ -83,13 +83,13 @@ Secret values must be supplied by your deployment process. Do not commit secret 
 file:/data/mcp-platform/mcp-platform.db
 ```
 
-Both core services mount the shared `mcp-platform-data` volume at `/data/mcp-platform`. The edge-only templates bind-mount `${MCP_DATA_DIR:-/data/coolify/mcp-platform-data}` so a separately deployed edge app can share the control-plane SQLite database without depending on deployment-platform volume renaming behavior.
+Both core services mount the shared `mcp-platform-data` volume at `/data/mcp-platform`. The edge-only templates bind-mount `/data/coolify/mcp-platform-data` so a separately deployed edge app can share the control-plane SQLite database without depending on deployment-platform volume renaming behavior.
 
-Before deploying edge, verify `MCP_DATA_DIR` on the deployment host resolves to the live control-plane SQLite data directory, contains `mcp-platform.db`, and is owned or writable by the distroless nonroot UID/GID `65532` used by the runtime image. Safe host-side checks that do not print secrets:
+Before deploying edge, verify `/data/coolify/mcp-platform-data` on the deployment host resolves to the live control-plane SQLite data directory, contains `mcp-platform.db`, and is owned or writable by the distroless nonroot UID/GID `65532` used by the runtime image. Safe host-side checks that do not print secrets:
 
 ```sh
 CONTROL_PLANE_SQLITE_DATA_DIR=/path/to/live/control-plane/sqlite-dir
-MCP_DATA_DIR=${MCP_DATA_DIR:-/data/coolify/mcp-platform-data}
+MCP_DATA_DIR=/data/coolify/mcp-platform-data
 sudo test -d "$MCP_DATA_DIR"
 test "$(sudo realpath "$MCP_DATA_DIR")" = "$(sudo realpath "$CONTROL_PLANE_SQLITE_DATA_DIR")"
 sudo test -f "$MCP_DATA_DIR/mcp-platform.db"
