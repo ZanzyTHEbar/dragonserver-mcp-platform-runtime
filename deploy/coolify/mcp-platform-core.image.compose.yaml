@@ -69,20 +69,15 @@ services:
       MCP_CONTROL_PLANE_INFISICAL_ENV_SLUG: ${MCP_CONTROL_PLANE_INFISICAL_ENV_SLUG:?set MCP_CONTROL_PLANE_INFISICAL_ENV_SLUG}
       MCP_CONTROL_PLANE_INFISICAL_MACHINE_CLIENT_ID: ${MCP_CONTROL_PLANE_INFISICAL_MACHINE_CLIENT_ID:?set MCP_CONTROL_PLANE_INFISICAL_MACHINE_CLIENT_ID}
       MCP_CONTROL_PLANE_INFISICAL_MACHINE_CLIENT_SECRET_PATH: /run/secrets/mcp-control-plane-infisical-machine-client-secret
-      MCP_CONTROL_PLANE_MEALIE_BASE_URL: ${MCP_CONTROL_PLANE_MEALIE_BASE_URL:?set MCP_CONTROL_PLANE_MEALIE_BASE_URL}
-      MCP_CONTROL_PLANE_ACTUAL_SERVER_URL: ${MCP_CONTROL_PLANE_ACTUAL_SERVER_URL:?set MCP_CONTROL_PLANE_ACTUAL_SERVER_URL}
-      MCP_CONTROL_PLANE_TENANT_IMAGE_MEALIE: ${MCP_CONTROL_PLANE_TENANT_IMAGE_MEALIE:-}
-      MCP_CONTROL_PLANE_TENANT_IMAGE_ACTUALBUDGET: ${MCP_CONTROL_PLANE_TENANT_IMAGE_ACTUALBUDGET:-}
-      MCP_CONTROL_PLANE_TENANT_IMAGE_MEMORY: ${MCP_CONTROL_PLANE_TENANT_IMAGE_MEMORY:-}
       MCP_CONTROL_PLANE_TENANT_IMAGE_MODE: ${MCP_CONTROL_PLANE_TENANT_IMAGE_MODE:-local}
     volumes:
       - mcp-platform-data:/data/mcp-platform
       - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-control-plane-infisical-machine-client-secret
+        source: ${MCP_SECRETS_DIR:-/data/coolify/mcp-platform-secrets}/mcp-control-plane-infisical-machine-client-secret
         target: /run/secrets/mcp-control-plane-infisical-machine-client-secret
         read_only: true
       - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-control-plane-admin-token
+        source: ${MCP_SECRETS_DIR:-/data/coolify/mcp-platform-secrets}/mcp-control-plane-admin-token
         target: /run/secrets/mcp-control-plane-admin-token
         read_only: true
     expose:
@@ -128,6 +123,8 @@ services:
       MCP_EDGE_AUTHENTIK_CLIENT_SECRET_PATH: /run/secrets/mcp-edge-authentik-client-secret
       MCP_EDGE_OPERATOR_TOKEN_PATH: /run/secrets/mcp-edge-operator-token
       MCP_EDGE_SESSION_ENCRYPTION_KEY_PATH: /run/secrets/mcp-edge-session-encryption-key
+      MCP_EDGE_IDENTITY_HEADER_SECRET_PATH: ${MCP_EDGE_IDENTITY_HEADER_SECRET_PATH:-}
+      MCP_EDGE_ACCOUNT_BINDING_CLAIM: ${MCP_EDGE_ACCOUNT_BINDING_CLAIM:-}
       MCP_EDGE_COOKIE_SECURE: ${MCP_EDGE_COOKIE_SECURE:-true}
       MCP_EDGE_CORS_ALLOWED_ORIGINS: ${MCP_EDGE_CORS_ALLOWED_ORIGINS:-}
       MCP_EDGE_DCR_ENABLED: ${MCP_EDGE_DCR_ENABLED:-false}
@@ -139,15 +136,15 @@ services:
     volumes:
       - mcp-platform-data:/data/mcp-platform
       - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-edge-authentik-client-secret
+        source: ${MCP_SECRETS_DIR:-/data/coolify/mcp-platform-secrets}/mcp-edge-authentik-client-secret
         target: /run/secrets/mcp-edge-authentik-client-secret
         read_only: true
       - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-edge-operator-token
+        source: ${MCP_SECRETS_DIR:-/data/coolify/mcp-platform-secrets}/mcp-edge-operator-token
         target: /run/secrets/mcp-edge-operator-token
         read_only: true
       - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-edge-session-encryption-key
+        source: ${MCP_SECRETS_DIR:-/data/coolify/mcp-platform-secrets}/mcp-edge-session-encryption-key
         target: /run/secrets/mcp-edge-session-encryption-key
         read_only: true
     expose:
