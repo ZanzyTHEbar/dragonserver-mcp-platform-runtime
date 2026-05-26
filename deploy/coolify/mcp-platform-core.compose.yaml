@@ -76,14 +76,8 @@ services:
       MCP_CONTROL_PLANE_TENANT_IMAGE_MODE: ${MCP_CONTROL_PLANE_TENANT_IMAGE_MODE:-local}
     volumes:
       - mcp-platform-data:/data/mcp-platform
-      - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-control-plane-infisical-machine-client-secret
-        target: /run/secrets/mcp-control-plane-infisical-machine-client-secret
-        read_only: true
-      - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-control-plane-admin-token
-        target: /run/secrets/mcp-control-plane-admin-token
-        read_only: true
+      - /data/coolify/mcp-platform-secrets/mcp-control-plane-infisical-machine-client-secret:/run/secrets/mcp-control-plane-infisical-machine-client-secret:ro
+      - /data/coolify/mcp-platform-secrets/mcp-control-plane-admin-token:/run/secrets/mcp-control-plane-admin-token:ro
     expose:
       - "8081"
     healthcheck:
@@ -141,22 +135,10 @@ services:
       MCP_EDGE_OAUTH_DEVICE_CODE_TTL: ${MCP_EDGE_OAUTH_DEVICE_CODE_TTL:-10m}
     volumes:
       - mcp-platform-data:/data/mcp-platform
-      - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-edge-authentik-client-secret
-        target: /run/secrets/mcp-edge-authentik-client-secret
-        read_only: true
-      - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-edge-operator-token
-        target: /run/secrets/mcp-edge-operator-token
-        read_only: true
-      - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-edge-session-encryption-key
-        target: /run/secrets/mcp-edge-session-encryption-key
-        read_only: true
-      - type: bind
-        source: /data/coolify/mcp-platform-secrets/mcp-identity-header-secret
-        target: /run/secrets/mcp-identity-header-secret
-        read_only: true
+      - /data/coolify/mcp-platform-secrets/mcp-edge-authentik-client-secret:/run/secrets/mcp-edge-authentik-client-secret:ro
+      - /data/coolify/mcp-platform-secrets/mcp-edge-operator-token:/run/secrets/mcp-edge-operator-token:ro
+      - /data/coolify/mcp-platform-secrets/mcp-edge-session-encryption-key:/run/secrets/mcp-edge-session-encryption-key:ro
+      - /data/coolify/mcp-platform-secrets/mcp-identity-header-secret:/run/secrets/mcp-identity-header-secret:ro
     expose:
       - "8080"
     healthcheck:

@@ -62,6 +62,8 @@ At minimum, configure:
 
 The Coolify templates mount runtime secrets from `/data/coolify/mcp-platform-secrets`, which is visible to Coolify's deployment build container on standard installations. If your host uses a different secret directory, update the template paths before deployment; Coolify rejects environment interpolation in bind-mount sources.
 
+Secret bind mounts intentionally use short `host:container:ro` syntax. Keep this form unless you have verified your deployment platform preserves long-form `read_only: true` bind options all the way into the running container.
+
 The templates pass `MCP_DOCKER_NETWORK` into service environment blocks. Some deployment platforms only expose variables to Compose interpolation when they appear in a service environment, even if the variables are also used elsewhere.
 
 Expected files:
@@ -75,6 +77,8 @@ Place these files under `/data/coolify/mcp-platform-secrets` on the deployment h
 - `mcp-edge-session-encryption-key`
 
 Secret values must be supplied by your deployment process. Do not commit secret values or environment-specific secret paths to this repository.
+
+Recommended host hardening is a root-owned `0700` secret directory and non-writable secret files readable by the nonroot runtime containers, for example root-owned `0444` files when the host directory itself prevents unrelated local reads. After deployment, `docker inspect` should show every `/run/secrets/*` mount with `RW=false`.
 
 ## Database volume
 

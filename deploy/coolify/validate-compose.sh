@@ -99,6 +99,55 @@ for expectation in expectations:
 PY
 }
 
+validate_secret_mounts() {
+  name="$1"
+  rendered_file="$2"
+
+  python3 - "${name}" "${rendered_file}" <<'PY'
+import json
+import sys
+
+name, rendered_file = sys.argv[1:]
+
+with open(rendered_file, encoding="utf-8") as rendered:
+    config = json.load(rendered)
+
+for service_name, service in config.get("services", {}).items():
+    for volume in service.get("volumes", []) or []:
+        if not isinstance(volume, dict):
+            continue
+        target = volume.get("target") or ""
+        if not target.startswith("/run/secrets/"):
+            continue
+        if volume.get("read_only") is not True:
+            sys.exit(f"{name} service {service_name} mounts secret {target!r} without read_only=true")
+PY
+}
+
+validate_secret_mount_syntax() {
+  name="$1"
+  compose_file="$2"
+
+  python3 - "${name}" "${compose_file}" <<'PY'
+import sys
+
+name, compose_file = sys.argv[1:]
+
+with open(compose_file, encoding="utf-8") as source:
+    for line_number, line in enumerate(source, start=1):
+        stripped = line.strip()
+        if stripped.startswith("target:") and "/run/secrets/" in stripped:
+            sys.exit(
+                f"{name}:{line_number} uses long-form secret target {stripped!r}; "
+                "use short host:container:ro syntax so deployment platforms preserve read-only binds"
+            )
+        if ":/run/secrets/" in stripped and not (stripped.startswith("- ") and stripped.endswith(":ro")):
+            sys.exit(
+                f"{name}:{line_number} mounts a secret without short-form :ro syntax: {stripped!r}"
+            )
+PY
+}
+
 validate_compose "source edge compose" "${script_dir}/mcp-edge.compose.yaml"
 validate_compose "image edge compose" "${script_dir}/mcp-edge.image.compose.yaml"
 validate_compose "source control-plane-only compose" "${script_dir}/mcp-control-plane.compose.yaml"
@@ -106,9 +155,26 @@ validate_compose "image control-plane-only compose" "${script_dir}/mcp-control-p
 validate_compose "combined source core stack compose" "${script_dir}/mcp-platform-core.compose.yaml"
 validate_compose "combined image core stack compose" "${script_dir}/mcp-platform-core.image.compose.yaml"
 
+validate_secret_mount_syntax "source edge compose" "${script_dir}/mcp-edge.compose.yaml"
+validate_secret_mount_syntax "image edge compose" "${script_dir}/mcp-edge.image.compose.yaml"
+validate_secret_mount_syntax "source control-plane-only compose" "${script_dir}/mcp-control-plane.compose.yaml"
+validate_secret_mount_syntax "image control-plane-only compose" "${script_dir}/mcp-control-plane.image.compose.yaml"
+validate_secret_mount_syntax "combined source core stack compose" "${script_dir}/mcp-platform-core.compose.yaml"
+validate_secret_mount_syntax "combined image core stack compose" "${script_dir}/mcp-platform-core.image.compose.yaml"
+
 render_compose_json "${script_dir}/mcp-edge.compose.yaml" "${tmp_dir}/mcp-edge.config.json"
+render_compose_json "${script_dir}/mcp-edge.image.compose.yaml" "${tmp_dir}/mcp-edge.image.config.json"
 render_compose_json "${script_dir}/mcp-control-plane.compose.yaml" "${tmp_dir}/mcp-control-plane.config.json"
+render_compose_json "${script_dir}/mcp-control-plane.image.compose.yaml" "${tmp_dir}/mcp-control-plane.image.config.json"
 render_compose_json "${script_dir}/mcp-platform-core.compose.yaml" "${tmp_dir}/mcp-platform-core.config.json"
+render_compose_json "${script_dir}/mcp-platform-core.image.compose.yaml" "${tmp_dir}/mcp-platform-core.image.config.json"
+
+validate_secret_mounts "source edge compose" "${tmp_dir}/mcp-edge.config.json"
+validate_secret_mounts "image edge compose" "${tmp_dir}/mcp-edge.image.config.json"
+validate_secret_mounts "source control-plane-only compose" "${tmp_dir}/mcp-control-plane.config.json"
+validate_secret_mounts "image control-plane-only compose" "${tmp_dir}/mcp-control-plane.image.config.json"
+validate_secret_mounts "combined source core stack compose" "${tmp_dir}/mcp-platform-core.config.json"
+validate_secret_mounts "combined image core stack compose" "${tmp_dir}/mcp-platform-core.image.config.json"
 
 validate_source_builds \
   "source edge compose" \
