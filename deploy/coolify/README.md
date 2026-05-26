@@ -70,6 +70,7 @@ Place these files under `/data/coolify/mcp-platform-secrets` on the deployment h
 
 - `mcp-control-plane-infisical-machine-client-secret`
 - `mcp-edge-authentik-client-secret`
+- `mcp-identity-header-secret`
 - `mcp-edge-operator-token`
 - `mcp-edge-session-encryption-key`
 
