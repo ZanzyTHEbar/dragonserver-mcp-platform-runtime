@@ -63,8 +63,6 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - coolify
 
